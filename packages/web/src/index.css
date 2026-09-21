@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+@layer base {
+  :root { color-scheme: light; }
+  :root[data-theme='dark'] { color-scheme: dark; }
+  button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--color-brand-500); outline-offset: 3px; }
+  input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select {
+    color: var(--color-text);
+    background-color: var(--color-surface);
+  }
+  input::placeholder, textarea::placeholder { color: var(--color-text-muted); opacity: 1; }
+  ::selection { background: var(--color-brand-200); color: var(--color-text); }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
+}
+
+@layer components {
+  .conversation-workspace { height: calc(100dvh - 200px); min-height: 340px; }
+  .message-bubble {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    background: var(--color-secondary-50);
+  }
+  /* 前景/背景成对定义，不依赖旧构建是否生成 primary 工具类。 */
+  .message-bubble-user { color: #ffffff; background: #1d4ed8; border-color: #1d4ed8; }
+  [data-theme='dark'] .message-bubble-user { background: #4338ca; border-color: #6366f1; }
+  /* 深色下链接用浅色，填充式按钮仍用深色底 + 白字。 */
+  [data-theme='dark'] .bg-primary-600.text-white,
+  [data-theme='dark'] .bg-brand-600.text-white { background-color: #4338ca; }
+  [data-theme='dark'] .bg-primary-600.text-white:hover,
+  [data-theme='dark'] .bg-brand-600.text-white:hover { background-color: #3730a3; }
+  [data-theme='highContrast'] .message-bubble-user { color: #000000; background: #facc15; border-color: #facc15; }
+}
+
+@media (min-width: 768px) {
+  .conversation-workspace { height: calc(100dvh - 160px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}

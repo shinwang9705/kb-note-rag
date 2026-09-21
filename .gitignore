@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# 运行时数据（db / 模型 / 上传文件 / 扩展二进制）
+data/*
+!data/.gitkeep
+
+# 本地配置
+.env
+.env.local
+.env.*.local
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# spike 里下载的临时产物
+spike/ext/*.tar.gz
+spike/data/

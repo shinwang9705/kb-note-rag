@@ -1,0 +1,36 @@
+{
+  "name": "kb-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "B/S 架构个人知识库：文档上传、解析、全文 + 语义混合检索、多用户隔离",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "npm run dev -w @kb/server",
+    "dev:web": "npm run dev -w @kb/web",
+    "build": "npm run build -w @kb/shared && npm run build -w @kb/server && npm run build -w @kb/web",
+    "start": "npm run start -w @kb/server",
+    "typecheck": "tsc -p packages/server/tsconfig.json --noEmit && tsc -p packages/web/tsconfig.json --noEmit",
+    "create-admin": "tsx scripts/create-admin.mjs",
+    "pretest": "npm run build -w @kb/shared",
+    "test": "node --import tsx --test packages/server/test/*.test.ts",
+    "check:parsers": "tsx scripts/check-parsers.mjs",
+    "check:ingest": "tsx scripts/check-ingest.mjs",
+    "check:search": "node scripts/check-search.mjs",
+    "make:pdf-sample": "node scripts/make-pdf-sample.mjs",
+    "seed": "node scripts/seed.mjs",
+    "import:samples": "node scripts/import-samples.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
