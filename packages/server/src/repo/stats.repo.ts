@@ -2,7 +2,7 @@
  * 驾驶舱聚合统计数据访问层（四期 T05）。
  * 全部查询强制 WHERE user_id=?（隔离铁律）；只做聚合，不产出任何文档正文。
  */
-import type { DistItem, StatsTrend, StatsTrendPoint, TopItem } from '@kb/shared';
+import type { ConversationQualityStats, DistItem, StatsTrend, StatsTrendPoint, TopItem } from '@kb/shared';
 import type { DbHandle } from '../db/connection.js';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -101,6 +101,47 @@ export function topDocs(db: DbHandle, userId: number): TopItem[] {
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 10)
     .map(([docId, entry]) => ({ key: String(docId), title: entry.title, count: entry.count }));
+}
+
+/** 聚合对话完成率、证据覆盖率、延迟和近期无证据问题。 */
+export function conversationQuality(db: DbHandle, userId: number, days: number): ConversationQualityStats {
+  const clamped = Math.min(Math.max(1, Math.trunc(days)), 90);
+  const minDate = recentDates(clamped)[0] ?? '';
+  const questions = Number(db.driver.get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM messages WHERE user_id = ? AND role = 'user' AND date(created_at) >= ?`,
+    [userId, minDate],
+  )?.c ?? 0);
+  const answer = db.driver.get<{ completed: number; failed: number; cited: number; avg_latency: number | null }>(
+    `SELECT
+       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed,
+       SUM(CASE WHEN status IN ('failed', 'aborted') THEN 1 ELSE 0 END) AS failed,
+       SUM(CASE WHEN status = 'done' AND citations_json IS NOT NULL AND citations_json NOT IN ('', '[]') THEN 1 ELSE 0 END) AS cited,
+       AVG(CASE WHEN status = 'done' AND latency_ms > 0 THEN latency_ms END) AS avg_latency
+     FROM messages WHERE user_id = ? AND role = 'assistant' AND date(created_at) >= ?`,
+    [userId, minDate],
+  );
+  const completedAnswers = Number(answer?.completed ?? 0);
+  const citedAnswers = Number(answer?.cited ?? 0);
+  const gaps = db.driver.all<{ content: string; c: number }>(
+    `SELECT u.content, COUNT(*) AS c
+     FROM messages u
+     JOIN messages a ON a.conversation_id = u.conversation_id AND a.seq = u.seq + 1
+     WHERE u.user_id = ? AND u.role = 'user' AND a.role = 'assistant' AND a.status = 'done'
+       AND date(u.created_at) >= ? AND (a.citations_json IS NULL OR a.citations_json IN ('', '[]'))
+     GROUP BY u.content ORDER BY c DESC, MAX(u.created_at) DESC LIMIT 8`,
+    [userId, minDate],
+  );
+  return {
+    days: clamped,
+    questions,
+    completedAnswers,
+    failedAnswers: Number(answer?.failed ?? 0),
+    citedAnswers,
+    completionRate: questions > 0 ? completedAnswers / questions : 0,
+    citationRate: completedAnswers > 0 ? citedAnswers / completedAnswers : 0,
+    averageLatencyMs: Math.round(Number(answer?.avg_latency ?? 0)),
+    noEvidenceQuestions: gaps.map((row, index) => ({ key: String(index), title: row.content, count: Number(row.c) })),
+  };
 }
 
 /** 文档类型分布（GROUP BY file_ext） */

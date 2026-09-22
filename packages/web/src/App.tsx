@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { api, clearToken, getCachedUser, getToken, setCachedUser, setToken, ApiClientError } from './api/client.js';
 import type { User } from '@kb/shared';
@@ -7,19 +7,27 @@ import type { ModeInfo } from './components/ModeBanner.js';
 import type { NavKey } from './nav.js';
 import LoginPage from './pages/LoginPage.js';
 import RegisterPage from './pages/RegisterPage.js';
-import HomePage from './pages/HomePage.js';
-import DocumentsPage from './pages/DocumentsPage.js';
-import SearchPage from './pages/SearchPage.js';
 import ConversationHub from './pages/ConversationHub.js';
-import SettingsPage from './pages/SettingsPage.js';
-import ProfilePage from './pages/ProfilePage.js';
-import AdminPage from './pages/AdminPage.js';
-import DocumentReaderPage from './pages/DocumentReaderPage.js';
-import UsagePage from './pages/UsagePage.js';
-import Dashboard from './pages/Dashboard.js';
-import CockpitPage from './pages/CockpitPage.js';
 import SharePage from './pages/SharePage.js';
 import { applyTheme } from './theme/applyTheme.js';
+
+const HomePage = lazy(() => import('./pages/HomePage.js'));
+const DocumentsPage = lazy(() => import('./pages/DocumentsPage.js'));
+const SearchPage = lazy(() => import('./pages/SearchPage.js'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage.js'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage.js'));
+const AdminPage = lazy(() => import('./pages/AdminPage.js'));
+const DocumentReaderPage = lazy(() => import('./pages/DocumentReaderPage.js'));
+const UsagePage = lazy(() => import('./pages/UsagePage.js'));
+const Dashboard = lazy(() => import('./pages/Dashboard.js'));
+const CockpitPage = lazy(() => import('./pages/CockpitPage.js'));
+
+const NAV_KEYS = new Set<NavKey>(['dashboard', 'libraries', 'documents', 'search', 'chat', 'usage', 'cockpit', 'profile', 'settings', 'admin']);
+
+function navFromHash(): NavKey {
+  const key = window.location.hash.replace(/^#\/?/, '').split('/')[0] as NavKey;
+  return NAV_KEYS.has(key) ? key : 'chat';
+}
 
 type View = 'login' | 'register' | 'app';
 
@@ -31,7 +39,7 @@ interface ReaderState {
 export default function App() {
   const [user, setUser] = useState<User | null>(() => getCachedUser());
   const [view, setView] = useState<View>(() => (getToken() ? 'app' : 'login'));
-  const [activeView, setActiveView] = useState<NavKey>('dashboard');
+  const [activeView, setActiveView] = useState<NavKey>(() => navFromHash());
   const [llmEnabled, setLlmEnabled] = useState<boolean | null>(null);
   const [needsSetup, setNeedsSetup] = useState<boolean>(false);
   const [showWizard, setShowWizard] = useState<boolean>(false);
@@ -57,6 +65,14 @@ export default function App() {
         setUser(null);
         setView('login');
       });
+  }, []);
+
+  useEffect(() => {
+    const syncFromUrl = (): void => {
+      if (!window.location.hash.startsWith('#/share/')) setActiveView(navFromHash());
+    };
+    window.addEventListener('hashchange', syncFromUrl);
+    return () => window.removeEventListener('hashchange', syncFromUrl);
   }, []);
 
   // 登录后读取 meta：llmEnabled（问答显隐）+ needsSetup（首次引导）+ 检索模式 + 主题初始化
@@ -116,7 +132,8 @@ export default function App() {
     setCachedUser(payload.user);
     setUser(payload.user);
     setView('app');
-    setActiveView('dashboard');
+    setActiveView('chat');
+    window.location.hash = '/chat';
   };
 
   const handleLogout = async (): Promise<void> => {
@@ -142,6 +159,7 @@ export default function App() {
       setSearchDocId('');
     }
     setActiveView(view);
+    if (window.location.hash !== `#/${view}`) window.location.hash = `/${view}`;
   };
 
   /** 全局检索 / 工作台快捷检索：带词跳检索页并自动检索 */
@@ -149,6 +167,7 @@ export default function App() {
     setSearchKeyword(keyword.trim());
     setSearchDocId('');
     setActiveView('search');
+    window.location.hash = '/search';
   };
 
   /** 打开原文（覆盖层），可带初始定位 chunk */
@@ -162,22 +181,26 @@ export default function App() {
     setSearchDocId(docId);
     setSearchKeyword('');
     setActiveView('search');
+    window.location.hash = '/search';
   };
 
   /** 工作台「继续对话」等外部跳转：落到对话工作区并携带目标会话 id */
   const handleOpenConversation = (id: number): void => {
     setTargetConversationId(id);
     setActiveView('chat');
+    window.location.hash = '/chat';
   };
 
   /** 进入驾驶舱（AppShell 之外的全屏大屏视图） */
   const handleOpenCockpit = (): void => {
     setActiveView('cockpit');
+    window.location.hash = '/cockpit';
   };
 
   /** 退出驾驶舱：返回工作台 */
   const handleExitCockpit = (): void => {
     setActiveView('dashboard');
+    window.location.hash = '/dashboard';
   };
 
   // 公开分享落地页：hash 前缀 #/share/ 覆盖登录态，公开访问
@@ -194,7 +217,7 @@ export default function App() {
 
   // 驾驶舱：AppShell 之外的全屏大屏分支（与 DocumentReaderPage 覆盖层同构的渲染策略）
   if (activeView === 'cockpit') {
-    return <CockpitPage user={user} onExit={handleExitCockpit} />;
+    return <Suspense fallback={<PageLoading />}><CockpitPage user={user} onExit={handleExitCockpit} /></Suspense>;
   }
 
   const renderPage = (): React.ReactNode => {
@@ -264,7 +287,7 @@ export default function App() {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
           >
-            {renderPage()}
+            <Suspense fallback={<PageLoading />}>{renderPage()}</Suspense>
           </motion.div>
         </AnimatePresence>
       </AppShell>
@@ -273,14 +296,14 @@ export default function App() {
       {reader ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-bg">
           <div className="mx-auto max-w-5xl p-4 sm:p-8">
-            <DocumentReaderPage
+            <Suspense fallback={<PageLoading />}><DocumentReaderPage
               docId={reader.docId}
               initialChunk={reader.chunk}
               onBack={() => {
                 setReader(null);
               }}
               onSearchInDoc={(docId) => handleSearchInDoc(docId)}
-            />
+            /></Suspense>
           </div>
         </div>
       ) : null}
@@ -301,10 +324,14 @@ export default function App() {
                 </button>
               )}
             </div>
-            <SettingsPage onSetupComplete={handleSetupComplete} />
+            <Suspense fallback={<PageLoading />}><SettingsPage onSetupComplete={handleSetupComplete} /></Suspense>
           </div>
         </div>
       ) : null}
     </>
   );
+}
+
+function PageLoading() {
+  return <div className="flex min-h-48 items-center justify-center text-sm text-muted">正在加载工作区…</div>;
 }

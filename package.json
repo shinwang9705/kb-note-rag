@@ -20,7 +20,7 @@
     "typecheck": "tsc -p packages/server/tsconfig.json --noEmit && tsc -p packages/web/tsconfig.json --noEmit",
     "create-admin": "tsx scripts/create-admin.mjs",
     "pretest": "npm run build -w @kb/shared",
-    "test": "node --import tsx --test packages/server/test/*.test.ts",
+    "test": "node --require ./scripts/.tsx-test-shim.cjs --test-concurrency=1 --import tsx --test packages/server/test/*.test.ts",
     "check:parsers": "tsx scripts/check-parsers.mjs",
     "check:ingest": "tsx scripts/check-ingest.mjs",
     "check:search": "node scripts/check-search.mjs",

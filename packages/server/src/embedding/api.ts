@@ -34,6 +34,13 @@ export interface ApiEmbeddingOptions {
 
 interface ApiEmbeddingResponse {
   data?: Array<{ embedding?: number[] }>;
+  output?: {
+    embeddings?: Array<{
+      embedding?: number[];
+      index?: number;
+      text_index?: number;
+    }>;
+  };
 }
 
 export class ApiEmbeddingProvider implements EmbeddingProvider {
@@ -41,6 +48,8 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dim: number;
   available: boolean;
+  /** 最近一次请求错误，仅用于连接测试与诊断，不包含 API Key。 */
+  lastError: string | null = null;
 
   private readonly options: ApiEmbeddingOptions;
   private readonly logger: EmbeddingLogger | null;
@@ -86,9 +95,11 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
       const batch = texts.slice(i, i + batchSize);
       try {
         const vectors = await this.embedBatch(batch);
+        this.lastError = null;
         output.push(...vectors);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        this.lastError = message;
         this.logger?.warn(`[embedding] embed 失败，本次不产出向量：${message}`);
         return [];
       }
@@ -111,7 +122,13 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
 
   private async embedBatch(texts: readonly string[]): Promise<number[][]> {
     const { apiBase, apiKey, apiModel, timeoutMs } = this.options;
-    const endpoint = `${apiBase.replace(/\/+$/, '')}/embeddings`;
+    const base = apiBase.replace(/\/+$/, '');
+    const parsedBase = new URL(base);
+    const isDashScopeNative = parsedBase.pathname.includes('/services/embeddings/');
+    // 用户可以填写 OpenAI 兼容基址，也可以直接填写 DashScope 原生完整端点。
+    // 对完整端点再次拼接 /embeddings 会形成无效 URL。
+    const isFullEmbeddingEndpoint = isDashScopeNative || /\/embeddings$/u.test(parsedBase.pathname);
+    const endpoint = isFullEmbeddingEndpoint ? base : `${base}/embeddings`;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(1, Math.trunc(timeoutMs)));
@@ -123,7 +140,9 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ model: apiModel, input: [...texts] }),
+        body: JSON.stringify(isDashScopeNative
+          ? { model: apiModel, input: { texts: [...texts] } }
+          : { model: apiModel, input: [...texts] }),
         signal: controller.signal,
       });
 
@@ -134,8 +153,12 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
 
       const payload = (await response.json()) as ApiEmbeddingResponse;
       const data = payload?.data ?? [];
+      const nativeData = payload?.output?.embeddings ?? [];
       // 按输入顺序取回，并归一化到声明维度，防御远端返回维度不一致
-      return texts.map((_, index) => normalizeVector(data[index]?.embedding ?? [], this.dim));
+      return texts.map((_, index) => {
+        const nativeItem = nativeData.find((item, position) => (item.text_index ?? item.index ?? position) === index);
+        return normalizeVector(data[index]?.embedding ?? nativeItem?.embedding ?? [], this.dim);
+      });
     } finally {
       clearTimeout(timer);
     }

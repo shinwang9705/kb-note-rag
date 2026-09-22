@@ -581,11 +581,24 @@ export interface RagConfidenceSettings {
   partialScore: number;
 }
 
+export type RagChunkStrategy = 'structured' | 'sliding';
+export type RagChunkBreakMode = 'sentence' | 'fixed';
+
+/** 文档入库分块规则；修改后仅影响新入库，已有文档需重建索引。 */
+export interface RagChunkSettings {
+  strategy: RagChunkStrategy;
+  size: number;
+  overlap: number;
+  breakMode: RagChunkBreakMode;
+  preserveSectionPath: boolean;
+}
+
 export interface RagSettings {
   search: RagSearchSettings;
   context: RagContextSettings;
   rerank: RagRerankSettings;
   confidence: RagConfidenceSettings;
+  chunk: RagChunkSettings;
 }
 
 /** 三挂载点共用的解析结果（resolveRagParams 单一出口） */
@@ -604,7 +617,7 @@ export interface RagStatus {
   embedding: { provider: string; model: string; available: boolean; dim: number };
   rerankProvider: { provider: string; model: string; available: boolean };
   vecAvailable: boolean;
-  chunk: { size: number; overlap: number };
+  chunk: RagChunkSettings;
   /** 运行级（本次生效，用户可实时调） */
   effective: RagSettings;
   resolved: ResolvedRagParams;
@@ -625,6 +638,31 @@ export interface RagSettingsPatch {
   context?: Partial<RagContextSettings>;
   rerank?: Partial<RagRerankSettings>;
   confidence?: Partial<RagConfidenceSettings>;
+  chunk?: Partial<RagChunkSettings>;
+}
+
+export type RagModelCapability = 'embedding' | 'rerank';
+export interface RagModelConfigView {
+  capability: RagModelCapability;
+  enabled: boolean;
+  configured: boolean;
+  source: 'user' | 'system' | 'none';
+  apiBase: string;
+  model: string;
+  maskedKey: string | null;
+  timeoutMs: number;
+  dim?: number;
+  batchSize?: number;
+}
+
+export interface SaveRagModelConfigInput {
+  enabled: boolean;
+  apiBase: string;
+  model: string;
+  apiKey?: string;
+  timeoutMs: number;
+  dim?: number;
+  batchSize?: number;
 }
 
 /** PATCH /api/settings 入参（白名单字段；rag 支持嵌套部分更新） */
@@ -690,6 +728,19 @@ export interface StatsTrendPoint {
 export interface StatsTrend {
   days: number;
   series: StatsTrendPoint[];
+}
+
+/** 对话质量驾驶舱：只包含聚合指标与待改进问题，不返回回答正文。 */
+export interface ConversationQualityStats {
+  days: number;
+  questions: number;
+  completedAnswers: number;
+  failedAnswers: number;
+  citedAnswers: number;
+  completionRate: number;
+  citationRate: number;
+  averageLatencyMs: number;
+  noEvidenceQuestions: TopItem[];
 }
 
 /** 分布条目（文档类型 / 知识库 / 状态） */

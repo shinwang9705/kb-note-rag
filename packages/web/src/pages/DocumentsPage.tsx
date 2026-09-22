@@ -49,6 +49,7 @@ export default function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [reindexing, setReindexing] = useState(false);
 
   // 配额
   const [quota, setQuota] = useState<{
@@ -137,6 +138,16 @@ export default function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
     setNotice(message);
     await loadDocuments();
     await loadQuota();
+  };
+
+  const handleReindex = async (): Promise<void> => {
+    if (reindexing) return;
+    setReindexing(true); setError(''); setNotice('');
+    try {
+      const result = await api.reindex();
+      setNotice(typeof result.jobId === 'number' ? `索引重建任务 #${result.jobId} 已进入后台队列，可在驾驶舱查看状态。` : '索引重建完成。');
+    } catch (err) { setError(err instanceof ApiClientError ? err.message : '索引重建任务创建失败'); }
+    finally { setReindexing(false); }
   };
 
   const handleUpload = async (event: React.FormEvent): Promise<void> => {
@@ -243,9 +254,9 @@ export default function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
     <div className="space-y-6">
       {/* 配额展示 */}
       {quota ? (
-        <div className="rounded-control border border-line bg-secondary-50 px-4 py-2 text-sm text-muted">
-          文档 {documents.length}/{quota.maxDocumentsPerUser} · 存储 {formatSize(quota.storageBytes)}/
-          {formatSize(quota.storageQuotaBytes)}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-secondary-50 px-4 py-2 text-sm text-muted">
+          <span>文档 {documents.length}/{quota.maxDocumentsPerUser} · 存储 {formatSize(quota.storageBytes)}/{formatSize(quota.storageQuotaBytes)}</span>
+          <button type="button" onClick={() => void handleReindex()} disabled={reindexing} className="rounded-control border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-primary-300 hover:text-primary-700 disabled:opacity-50">{reindexing ? '正在提交…' : '后台重建索引'}</button>
         </div>
       ) : null}
 

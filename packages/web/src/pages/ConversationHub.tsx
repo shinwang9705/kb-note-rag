@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import ChatPage from './ChatPage.js';
 import ConversationPage from './ConversationPage.js';
-import HistoryPage from './HistoryPage.js';
 
 interface ConversationHubProps {
   /** App 下发的 llmEnabled；false 时整个对话工作区置灰提示 */
@@ -13,17 +11,9 @@ interface ConversationHubProps {
   onOpenDocument: (docId: number) => void;
 }
 
-type HubMode = 'conversation' | 'chat' | 'history';
-
-const MODES: Array<{ key: HubMode; label: string }> = [
-  { key: 'conversation', label: '多轮对话' },
-  { key: 'chat', label: '单轮问答' },
-  { key: 'history', label: '历史' },
-];
-
 /**
- * 对话容器页：顶部模式切换（多轮对话[默认]/单轮问答/历史），分发渲染子页面。
- * 历史 → 打开对话：内部切到多轮并下发目标会话 id。
+ * 统一对话工作区。单轮问答是“新建对话后只问一次”的自然子集，历史也直接
+ * 收纳在左侧会话栏，不再让用户先判断应该进入哪个模式。
  */
 export default function ConversationHub({
   llmEnabled,
@@ -31,13 +21,11 @@ export default function ConversationHub({
   onConsumedTarget,
   onOpenDocument,
 }: ConversationHubProps) {
-  const [mode, setMode] = useState<HubMode>('conversation');
   const [internalTargetId, setInternalTargetId] = useState<number | null>(null);
 
   // 外部 targetConversationId（工作台「继续对话」等）→ 切多轮并消费
   useEffect(() => {
     if (targetConversationId) {
-      setMode('conversation');
       setInternalTargetId(targetConversationId);
       onConsumedTarget();
     }
@@ -57,44 +45,10 @@ export default function ConversationHub({
   }
 
   return (
-    <div className="space-y-4">
-      {/* 模式切换 */}
-      <nav className="flex gap-1 border-b border-line">
-        {MODES.map((item) => {
-          const active = mode === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setMode(item.key)}
-              className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-                active
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-muted hover:text-ink'
-              }`}
-            >
-              {item.label}
-            </button>
-          );
-        })}
-      </nav>
-
-      {mode === 'conversation' ? (
-        <ConversationPage
-          targetConversationId={internalTargetId}
-          onConsumedTarget={() => setInternalTargetId(null)}
-          onOpenDocument={onOpenDocument}
-        />
-      ) : null}
-      {mode === 'chat' ? <ChatPage onOpenDocument={onOpenDocument} /> : null}
-      {mode === 'history' ? (
-        <HistoryPage
-          onOpenConversation={(id) => {
-            setMode('conversation');
-            setInternalTargetId(id);
-          }}
-        />
-      ) : null}
-    </div>
+    <ConversationPage
+      targetConversationId={internalTargetId}
+      onConsumedTarget={() => setInternalTargetId(null)}
+      onOpenDocument={onOpenDocument}
+    />
   );
 }

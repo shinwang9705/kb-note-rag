@@ -45,6 +45,7 @@ function mergeRag(base: RagSettings, patch: RagSettingsPatch): RagSettings {
     context: { ...base.context, ...(patch.context ?? {}) },
     rerank: { ...base.rerank, ...(patch.rerank ?? {}) },
     confidence: { ...base.confidence, ...(patch.confidence ?? {}) },
+    chunk: { ...base.chunk, ...(patch.chunk ?? {}) },
   };
 }
 

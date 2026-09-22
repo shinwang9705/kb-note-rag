@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiClientError } from '../api/client.js';
-import type {
-  GenerationParams,
-  PatchSettingsInput,
-  ProviderInfo,
-  RagSearchMode,
-  RagSettingsPatch,
-  RagStatus,
-  Settings,
+import {
+  DEFAULT_RAG_SETTINGS,
+  type GenerationParams,
+  type PatchSettingsInput,
+  type ProviderInfo,
+  type RagModelCapability,
+  type RagModelConfigView,
+  type RagSearchMode,
+  type RagSettingsPatch,
+  type RagStatus,
+  type SaveRagModelConfigInput,
+  type Settings,
 } from '@kb/shared';
 import { applyTheme, THEME_IDS, THEME_LABELS, type ThemeId } from '../theme/applyTheme.js';
 
@@ -26,6 +30,20 @@ const THEME_SWATCH: Record<ThemeId, string> = {
   highContrast: '#1e40af',
 };
 
+function normalizeSettingsForUi(settings: Settings): Settings {
+  return {
+    ...settings,
+    rag: {
+      ...settings.rag,
+      chunk: { ...DEFAULT_RAG_SETTINGS.chunk, ...(settings.rag?.chunk ?? {}) },
+    },
+  };
+}
+
+function normalizeRagStatusForUi(status: RagStatus): RagStatus {
+  return { ...status, chunk: { ...DEFAULT_RAG_SETTINGS.chunk, ...(status.chunk ?? {}) } };
+}
+
 function validateKey(key: string, hint?: string): string | null {
   if (!key.trim()) return '请输入 API Key';
   if (hint && hint.includes('sk-') && !key.trim().startsWith('sk-')) return 'Key 应以 sk- 开头';
@@ -36,10 +54,10 @@ function ParamSlider({ label, value, min, max, step, onChange }: {
   label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void;
 }) {
   return (
-    <label className="block text-sm">
-      <span className="mb-1 flex items-center justify-between text-muted">
-        <span>{label}</span>
-        <span className="font-mono text-xs text-muted">{value}</span>
+    <label className="block rounded-card border border-line bg-secondary-50 p-4 text-sm transition-colors hover:border-primary-200">
+      <span className="mb-3 flex items-center justify-between text-muted">
+        <span className="font-medium text-ink">{label}</span>
+        <span className="rounded-control bg-surface px-2 py-1 font-mono text-xs text-primary-700">{value}</span>
       </span>
       <input
         type="range"
@@ -66,7 +84,7 @@ function RagSlider({ label, desc, value, min, max, step, unit, disabled, onChang
   unit?: string; disabled?: boolean; onChange: (v: number) => void;
 }) {
   return (
-    <div className={disabled ? 'opacity-40' : ''}>
+    <div className={`rounded-card border border-line bg-secondary-50 p-4 transition-colors hover:border-primary-200 ${disabled ? 'opacity-40' : ''}`}>
       <div className="flex items-baseline justify-between">
         <span className="text-sm font-medium text-ink">{label}</span>
         <span className="font-mono text-xs text-muted">
@@ -74,7 +92,7 @@ function RagSlider({ label, desc, value, min, max, step, unit, disabled, onChang
           {unit ? ` ${unit}` : ''}
         </span>
       </div>
-      <p className="mb-1 text-xs text-muted">{desc}</p>
+      <p className="mb-3 mt-1 min-h-8 text-xs leading-5 text-muted">{desc}</p>
       <input
         type="range"
         min={min}
@@ -93,7 +111,7 @@ function RagToggle({ label, desc, checked, onChange }: {
   label: string; desc: string; checked: boolean; onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
+    <div className="flex items-start justify-between gap-3 rounded-card border border-line bg-secondary-50 p-4">
       <div>
         <div className="text-sm font-medium text-ink">{label}</div>
         <p className="text-xs text-muted">{desc}</p>
@@ -130,6 +148,11 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [ragStatus, setRagStatus] = useState<RagStatus | null>(null);
+  const [ragModels, setRagModels] = useState<RagModelConfigView[]>([]);
+  const [ragDrafts, setRagDrafts] = useState<Partial<Record<RagModelCapability, SaveRagModelConfigInput>>>({});
+  const [ragModelBusy, setRagModelBusy] = useState<RagModelCapability | null>(null);
+  const [ragModelNotice, setRagModelNotice] = useState<Partial<Record<RagModelCapability, string>>>({});
+  const [ragModelsSupported, setRagModelsSupported] = useState<boolean | null>(null);
 
   const selected = providers.find((provider) => provider.id === providerId);
 
@@ -166,7 +189,24 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
     try {
       const [providerRes, settingsRes] = await Promise.all([api.providers(), api.settings()]);
       setProviders(providerRes.items);
-      setSettings(settingsRes);
+      setSettings(normalizeSettingsForUi(settingsRes));
+      try {
+        const ragModelRes = await api.ragModels();
+        setRagModelsSupported(true);
+        setRagModels(ragModelRes.items);
+        setRagDrafts(Object.fromEntries(ragModelRes.items.map((item) => [item.capability, {
+          enabled: item.enabled,
+          apiBase: item.apiBase,
+          model: item.model,
+          apiKey: '',
+          timeoutMs: item.timeoutMs,
+          ...(item.capability === 'embedding' ? { dim: item.dim, batchSize: item.batchSize } : {}),
+        }])));
+      } catch {
+        setRagModelsSupported(false);
+        setRagModels([]);
+        setRagDrafts({});
+      }
       setProviderId((prev) => {
         if (prev && providerRes.items.some((p) => p.id === prev)) return prev;
         const def = providerRes.items.find((p) => p.isDefault) ?? providerRes.items.find((p) => p.configured) ?? providerRes.items[0];
@@ -180,7 +220,7 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
 
   const loadRagStatus = async (): Promise<void> => {
     try {
-      setRagStatus(await api.ragStatus());
+      setRagStatus(normalizeRagStatusForUi(await api.ragStatus()));
     } catch {
       setRagStatus(null);
     }
@@ -242,7 +282,7 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
     const save = saveQueue.current.then(async () => {
       try {
         const res = await api.patchSettings(patch);
-        if (version === saveVersion.current) { setSettings(res.settings); setError(''); }
+        if (version === saveVersion.current) { setSettings(normalizeSettingsForUi(res.settings)); setError(''); }
       } catch (err) {
         setError(err instanceof ApiClientError ? err.message : '设置保存失败，请重新操作。');
       } finally {
@@ -264,7 +304,65 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
     return persistSettings({ ui: { themeId } });
   };
 
-  const updateRag = (patch: RagSettingsPatch): Promise<void> => persistSettings({ rag: patch });
+  const updateRag = async (patch: RagSettingsPatch): Promise<void> => {
+    await persistSettings({ rag: patch });
+    await loadRagStatus();
+  };
+
+  const patchRagDraft = (capability: RagModelCapability, patch: Partial<SaveRagModelConfigInput>): void => {
+    setRagDrafts((prev) => ({ ...prev, [capability]: { ...prev[capability], ...patch } as SaveRagModelConfigInput }));
+    setRagModelNotice((prev) => ({ ...prev, [capability]: '' }));
+  };
+
+  const saveRagModel = async (capability: RagModelCapability): Promise<void> => {
+    const draft = ragDrafts[capability];
+    if (!draft) return;
+    setRagModelBusy(capability);
+    setError('');
+    try {
+      const result = await api.saveRagModel(capability, { ...draft, apiKey: draft.apiKey?.trim() || undefined });
+      setRagModels(result.items);
+      patchRagDraft(capability, { apiKey: '' });
+      setRagModelNotice((prev) => ({ ...prev, [capability]: '已保存并立即生效' }));
+      await loadRagStatus();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'RAG 模型配置保存失败');
+    } finally {
+      setRagModelBusy(null);
+    }
+  };
+
+  const testRagModel = async (capability: RagModelCapability): Promise<void> => {
+    const draft = ragDrafts[capability];
+    if (!draft) return;
+    setRagModelBusy(capability);
+    setError('');
+    try {
+      const result = await api.testRagModel(capability, { ...draft, apiKey: draft.apiKey?.trim() || undefined });
+      setRagModelNotice((prev) => ({ ...prev, [capability]: result.message }));
+    } catch (err) {
+      setRagModelNotice((prev) => ({ ...prev, [capability]: err instanceof ApiClientError ? err.message : '连接测试失败' }));
+    } finally {
+      setRagModelBusy(null);
+    }
+  };
+
+  const resetRagModel = async (capability: RagModelCapability): Promise<void> => {
+    setRagModelBusy(capability);
+    setError('');
+    try {
+      const result = await api.resetRagModel(capability);
+      setRagModels(result.items);
+      const item = result.items.find((entry) => entry.capability === capability);
+      if (item) setRagDrafts((prev) => ({ ...prev, [capability]: { enabled: item.enabled, apiBase: item.apiBase, model: item.model, apiKey: '', timeoutMs: item.timeoutMs, ...(capability === 'embedding' ? { dim: item.dim, batchSize: item.batchSize } : {}) } }));
+      setRagModelNotice((prev) => ({ ...prev, [capability]: '已恢复系统默认配置' }));
+      await loadRagStatus();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : '恢复默认配置失败');
+    } finally {
+      setRagModelBusy(null);
+    }
+  };
 
   const testErrorHint = (message?: string): string => {
     if (!message) return '';
@@ -275,6 +373,21 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
 
   return (
     <div className="space-y-6">
+      <header className="overflow-hidden rounded-card border border-primary-100 bg-gradient-to-br from-primary-50 via-surface to-secondary-50 p-6 shadow-card">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-600">System control center</p>
+            <h1 className="mt-2 text-2xl font-semibold text-ink">设置中心</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">统一管理生成模型、RAG 检索链路、分块策略与界面偏好。运行参数保存后立即生效，分块与向量模型变更会提示重建索引。</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <span className="rounded-pill border border-line bg-surface px-3 py-1.5 text-center text-ink">生成模型</span>
+            <span className="rounded-pill border border-line bg-surface px-3 py-1.5 text-center text-ink">RAG 模型</span>
+            <span className="rounded-pill border border-line bg-surface px-3 py-1.5 text-center text-ink">分块规则</span>
+            <span className="rounded-pill border border-line bg-surface px-3 py-1.5 text-center text-ink">界面主题</span>
+          </div>
+        </div>
+      </header>
       {settingsSaving ? <p role="status" className="text-sm text-muted">正在保存设置…</p> : null}
       {/* 供应商配置向导 */}
       <section className="rounded-card border border-line bg-surface p-6 shadow-card">
@@ -293,9 +406,9 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
             ) : (
               <>
                 <h3 className="mb-2 text-sm font-medium text-ink">已配置供应商</h3>
-                <ul className="divide-y divide-line rounded-card border border-line">
+                <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {configuredProviders.map((provider) => (
-                    <li key={provider.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                    <li key={provider.id} className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-secondary-50 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-ink">{provider.displayName}</span>
@@ -496,7 +609,7 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
       <section className="rounded-card border border-line bg-surface p-6 shadow-card">
         <h3 className="mb-4 text-lg font-medium">模型参数</h3>
         {settings ? (
-          <div className="space-y-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <ParamSlider label="temperature" value={settings.generation.temperature} min={0} max={2} step={0.1} onChange={(v) => void updateParam('temperature', v)} />
             <ParamSlider label="topP" value={settings.generation.topP} min={0} max={1} step={0.05} onChange={(v) => void updateParam('topP', v)} />
             <ParamSlider label="maxTokens" value={settings.generation.maxTokens} min={256} max={8192} step={256} onChange={(v) => void updateParam('maxTokens', v)} />
@@ -527,14 +640,132 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
         </div>
       </section>
 
+      {/* RAG 模型接入：用户级加密凭证，覆盖服务器默认配置 */}
+      <section className="rounded-card border border-line bg-surface p-6 shadow-card">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-medium text-ink">RAG 模型接入</h3>
+            <p className="mt-1 text-sm text-muted">在前端配置向量化与精排 API。密钥加密保存，留空表示保留已存密钥。</p>
+          </div>
+          <span className="rounded-pill bg-primary-50 px-3 py-1 text-xs text-primary-700">用户级配置</span>
+        </div>
+        {ragModelsSupported === false ? (
+          <div className="rounded-card border border-warning-200 bg-warning-50 p-4 text-sm leading-6 text-warning-700">
+            当前运行的后端尚未提供 RAG 模型配置接口。其他设置仍可正常使用；重启后端服务后即可在这里配置 Embedding 与 Rerank API。
+          </div>
+        ) : <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {(['embedding', 'rerank'] as const).map((capability) => {
+            const view = ragModels.find((item) => item.capability === capability);
+            const draft = ragDrafts[capability];
+            const isEmbedding = capability === 'embedding';
+            if (!draft) return <div key={capability} className="rounded-card border border-line p-5 text-sm text-muted">加载中…</div>;
+            return (
+              <article key={capability} className="rounded-card border border-line bg-secondary-50 p-5">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-control bg-primary-100 text-primary-700">{isEmbedding ? 'E' : 'R'}</span>
+                      <div>
+                        <h4 className="font-medium text-ink">{isEmbedding ? '向量模型 Embedding' : '精排模型 Rerank'}</h4>
+                        <p className="text-xs text-muted">{isEmbedding ? '生成语义向量，支持向量与混合检索' : '对召回结果二次排序，提高证据相关性'}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`rounded-pill px-2 py-1 text-xs ${view?.source === 'user' ? 'bg-primary-100 text-primary-700' : 'bg-surface text-muted'}`}>
+                    {view?.source === 'user' ? '自定义' : view?.source === 'system' ? '系统默认' : '未配置'}
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-xs text-muted">API 地址
+                    <input aria-label={`${capability} API 地址`} value={draft.apiBase} onChange={(event) => patchRagDraft(capability, { apiBase: event.target.value })} placeholder={isEmbedding ? 'https://.../v1' : 'https://.../rerank'} className="mt-1 w-full rounded-control border border-line px-3 py-2 text-sm outline-none focus:border-primary-500" />
+                  </label>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="block text-xs text-muted">模型名称
+                      <input aria-label={`${capability} 模型名称`} value={draft.model} onChange={(event) => patchRagDraft(capability, { model: event.target.value })} className="mt-1 w-full rounded-control border border-line px-3 py-2 text-sm outline-none focus:border-primary-500" />
+                    </label>
+                    <label className="block text-xs text-muted">请求超时（ms）
+                      <input aria-label={`${capability} 请求超时`} type="number" min={1000} max={120000} step={1000} value={draft.timeoutMs} onChange={(event) => patchRagDraft(capability, { timeoutMs: Number(event.target.value) })} className="mt-1 w-full rounded-control border border-line px-3 py-2 text-sm outline-none focus:border-primary-500" />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-muted">API Key
+                    <input aria-label={`${capability} API Key`} type="password" value={draft.apiKey ?? ''} onChange={(event) => patchRagDraft(capability, { apiKey: event.target.value })} placeholder={view?.maskedKey ? `已保存 ${view.maskedKey}，留空不修改` : '首次配置必须填写'} autoComplete="new-password" className="mt-1 w-full rounded-control border border-line px-3 py-2 text-sm outline-none focus:border-primary-500" />
+                  </label>
+                  {isEmbedding ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs text-muted">向量维度
+                        <input aria-label="Embedding 向量维度" type="number" value={draft.dim ?? 1024} readOnly className="mt-1 w-full rounded-control border border-line bg-secondary-100 px-3 py-2 text-sm text-muted" />
+                      </label>
+                      <label className="block text-xs text-muted">批处理大小
+                        <input aria-label="Embedding 批处理大小" type="number" min={1} max={128} value={draft.batchSize ?? 16} onChange={(event) => patchRagDraft(capability, { batchSize: Number(event.target.value) })} className="mt-1 w-full rounded-control border border-line px-3 py-2 text-sm outline-none focus:border-primary-500" />
+                      </label>
+                    </div>
+                  ) : null}
+                  <RagToggle label="启用此模型" desc="关闭后自动降级到关键词检索或跳过精排" checked={draft.enabled} onChange={(enabled) => patchRagDraft(capability, { enabled })} />
+                </div>
+
+                {ragModelNotice[capability] ? <p role="status" className="mt-3 rounded-control bg-surface px-3 py-2 text-xs text-primary-700">{ragModelNotice[capability]}</p> : null}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void saveRagModel(capability)} disabled={ragModelBusy !== null} className="rounded-control bg-primary-600 px-3 py-2 text-sm text-white hover:bg-primary-700 disabled:opacity-50">保存配置</button>
+                  <button type="button" onClick={() => void testRagModel(capability)} disabled={ragModelBusy !== null} className="rounded-control border border-primary-200 bg-surface px-3 py-2 text-sm text-primary-700 hover:bg-primary-50 disabled:opacity-50">{ragModelBusy === capability ? '处理中…' : '测试连接'}</button>
+                  {view?.source === 'user' ? <button type="button" onClick={() => void resetRagModel(capability)} disabled={ragModelBusy !== null} className="rounded-control border border-line px-3 py-2 text-sm text-muted hover:bg-secondary-100 disabled:opacity-50">恢复系统默认</button> : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>}
+        {ragModelsSupported !== false ? <p className="mt-4 rounded-control bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700">Embedding 模型或分块规则变化后，请到文档页提交“后台重建索引”；向量维度必须与当前索引一致。</p> : null}
+      </section>
+
       {/* RAG 设置（运行级参数，改即保存） */}
       <section className="rounded-card border border-line bg-surface p-6 shadow-card">
         <h3 className="mb-4 text-lg font-medium">RAG 设置</h3>
         {settings ? (
-          <div className="space-y-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* 分块规则 */}
+            <div className="space-y-4 rounded-card border border-line p-5 md:col-span-2">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 className="font-medium text-ink">分块规则</h4>
+                  <p className="mt-1 text-xs text-muted">控制文档如何拆成可检索证据。修改规则后已有文档需要重建索引。</p>
+                </div>
+                <span className="rounded-pill bg-warning-50 px-2 py-1 text-xs text-warning-700">影响索引版本</span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {([
+                  { value: 'structured' as const, label: '结构化分块', desc: '优先按 Markdown 标题和段落切分，保留章节语义' },
+                  { value: 'sliding' as const, label: '滑动窗口', desc: '按固定窗口连续切分，适合无明显结构的长文本' },
+                ]).map((option) => (
+                  <button key={option.value} type="button" onClick={() => void updateRag({ chunk: { strategy: option.value } })} className={`rounded-card border p-4 text-left ${settings.rag.chunk.strategy === option.value ? 'border-primary-500 bg-primary-50' : 'border-line bg-secondary-50 hover:border-primary-200'}`}>
+                    <div className="font-medium text-ink">{option.label}</div>
+                    <p className="mt-1 text-xs leading-5 text-muted">{option.desc}</p>
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <RagSlider label="片段长度" desc="每个 chunk 的目标字符数，较小更精准，较大上下文更完整" value={settings.rag.chunk.size} min={200} max={4000} step={50} unit="字符" onChange={(v) => void updateRag({ chunk: { size: v } })} />
+                <RagSlider label="重叠长度" desc="相邻 chunk 保留的上下文，必须小于片段长度" value={settings.rag.chunk.overlap} min={0} max={Math.max(0, settings.rag.chunk.size - 10)} step={10} unit="字符" onChange={(v) => void updateRag({ chunk: { overlap: v } })} />
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted">边界处理</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    { value: 'sentence' as const, label: '句子边界', desc: '尽量在句号、问号或换行处截断' },
+                    { value: 'fixed' as const, label: '固定长度', desc: '严格按字符窗口截断，速度更稳定' },
+                  ]).map((option) => (
+                    <button key={option.value} type="button" onClick={() => void updateRag({ chunk: { breakMode: option.value } })} className={`rounded-control border p-3 text-left ${settings.rag.chunk.breakMode === option.value ? 'border-primary-500 bg-primary-50' : 'border-line bg-secondary-50 hover:border-primary-200'}`}>
+                      <div className="text-sm font-medium text-ink">{option.label}</div>
+                      <p className="mt-1 text-xs text-muted">{option.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <RagToggle label="保留章节路径" desc="在 chunk 元数据中保留标题层级，引用时更容易定位原文位置" checked={settings.rag.chunk.preserveSectionPath} onChange={(value) => void updateRag({ chunk: { preserveSectionPath: value } })} />
+            </div>
+
             {/* 检索 */}
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-muted">检索</h4>
+            <div className="space-y-4 rounded-card border border-line p-5">
+              <div><h4 className="font-medium text-ink">召回策略</h4><p className="mt-1 text-xs text-muted">决定候选证据从哪里来、保留多少条。</p></div>
               <RagSlider
                 label="topK"
                 desc="召回候选数（单通道）"
@@ -582,8 +813,8 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
             </div>
 
             {/* 上下文 */}
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-muted">上下文</h4>
+            <div className="space-y-4 rounded-card border border-line p-5">
+              <div><h4 className="font-medium text-ink">生成上下文</h4><p className="mt-1 text-xs text-muted">控制最终进入大模型提示词的证据数量。</p></div>
               <RagSlider
                 label="context.topK"
                 desc="进生成片段数（rerank 不可用时的 fallback）"
@@ -597,8 +828,8 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
             </div>
 
             {/* 精排 Rerank */}
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-muted">精排 Rerank</h4>
+            <div className="space-y-4 rounded-card border border-line p-5">
+              <div><h4 className="font-medium text-ink">精排策略</h4><p className="mt-1 text-xs text-muted">用 Rerank 模型重新评估召回证据的相关性。</p></div>
               <RagToggle
                 label="enabled"
                 desc="启用精排（需 provider 可用才真正生效）"
@@ -630,8 +861,8 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
             </div>
 
             {/* 置信度阈值 */}
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-muted">置信度阈值</h4>
+            <div className="space-y-4 rounded-card border border-line p-5">
+              <div><h4 className="font-medium text-ink">置信度分级</h4><p className="mt-1 text-xs text-muted">把答案标记为有据、部分有据或证据不足。</p></div>
               <RagSlider
                 label="groundedScore"
                 desc="top1 相关度 ≥ 此值判为有据"
@@ -702,7 +933,7 @@ export default function SettingsPage({ onSetupComplete }: SettingsPageProps) {
               <div className="rounded-control border border-line p-3">
                 <div className="text-xs text-muted">分块参数</div>
                 <div className="mt-1 text-sm text-ink">
-                  size {ragStatus.chunk.size} · overlap {ragStatus.chunk.overlap}
+                  {ragStatus.chunk.strategy === 'structured' ? '结构化' : '滑动窗口'} · {ragStatus.chunk.size}/{ragStatus.chunk.overlap} · {ragStatus.chunk.breakMode === 'sentence' ? '句子边界' : '固定边界'}
                 </div>
               </div>
             </div>

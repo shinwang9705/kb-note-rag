@@ -13,11 +13,13 @@ import { ApiError, ok } from '../errors.js';
 import { isVectorReady, resolveSearchMode, search, type SearchContext } from '../../service/search.service.js';
 import { findDocumentById } from '../../repo/document.repo.js';
 import { clear as clearHistory, listRecent, record as recordHistory } from '../../repo/search-history.repo.js';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
 
 export interface SearchRouteContext {
   db: DbHandle;
   config: AppConfig;
   embedding: EmbeddingProvider;
+  ragModels: RagProviderResolver;
 }
 
 interface SearchBody {
@@ -32,8 +34,8 @@ interface SearchBody {
 const MODES = ['auto', 'hybrid', 'keyword', 'vector'] as const;
 
 /** 路由层只负责校验与转译，检索逻辑全部在 service 层 */
-function contextOf(ctx: SearchRouteContext): SearchContext {
-  return { db: ctx.db, config: ctx.config, embedding: ctx.embedding };
+function contextOf(ctx: SearchRouteContext, userId: number): SearchContext {
+  return { db: ctx.db, config: ctx.config, embedding: ctx.ragModels.embeddingFor(userId, ctx.embedding) };
 }
 
 /** docId 若指定需校验归属；越权/不存在一律 404 */
@@ -78,7 +80,7 @@ export function createSearchRoutes(ctx: SearchRouteContext): FastifyPluginAsync 
         if (!query) throw ApiError.badRequest('查询词不能为空');
         assertDocOwned(ctx, request.userId, body.docId);
 
-        const result = await search(contextOf(ctx), {
+        const result = await search(contextOf(ctx, request.userId), {
           userId: request.userId,
           query,
           libraryId: body.libraryId ?? null,
@@ -143,7 +145,7 @@ export function createSearchRoutes(ctx: SearchRouteContext): FastifyPluginAsync 
         if (!query) throw ApiError.badRequest('缺少查询参数 q');
         assertDocOwned(ctx, request.userId, qs.docId);
 
-        const result = await search(contextOf(ctx), {
+        const result = await search(contextOf(ctx, request.userId), {
           userId: request.userId,
           query,
           libraryId: qs.libraryId ?? null,
@@ -170,13 +172,14 @@ export function createSearchRoutes(ctx: SearchRouteContext): FastifyPluginAsync 
      * GET /api/search/mode —— 当前实际生效的检索模式。
      * 前端 ModeBanner 用它显示"混合检索 / 仅关键词"，不用猜。
      */
-    app.get('/api/search/mode', { onRequest: [requireAuth] }, async () => {
-      const mode = resolveSearchMode('auto', ctx.db, ctx.embedding);
+    app.get('/api/search/mode', { onRequest: [requireAuth] }, async (request: FastifyRequest) => {
+      const embedding = ctx.ragModels.embeddingFor(request.userId, ctx.embedding);
+      const mode = resolveSearchMode('auto', ctx.db, embedding);
       return ok({
         mode,
-        embeddingProvider: ctx.embedding.kind,
-        embeddingModel: ctx.embedding.model,
-        embeddingAvailable: ctx.embedding.available,
+        embeddingProvider: embedding.kind,
+        embeddingModel: embedding.model,
+        embeddingAvailable: embedding.available,
         vecAvailable: ctx.db.vecAvailable,
         vectorReady: isVectorReady(ctx.db, ctx.embedding),
       });

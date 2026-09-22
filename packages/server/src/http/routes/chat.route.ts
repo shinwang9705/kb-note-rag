@@ -13,6 +13,7 @@ import { resolveDefaultProvider } from '../../llm/index.js';
 import { createRequireAuthHook } from '../hooks/auth.js';
 import { ApiError, ok } from '../errors.js';
 import { ask, askStream, type ChatContext } from '../../service/chat.service.js';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
 
 export interface ChatRouteContext {
   db: DbHandle;
@@ -20,6 +21,7 @@ export interface ChatRouteContext {
   embedding: EmbeddingProvider;
   rerank: RerankProvider;
   gateway: ModelGateway;
+  ragModels: RagProviderResolver;
 }
 
 interface ChatBody {
@@ -29,12 +31,12 @@ interface ChatBody {
   topK?: number;
 }
 
-function contextOf(ctx: ChatRouteContext): ChatContext {
+function contextOf(ctx: ChatRouteContext, userId: number): ChatContext {
   return {
     db: ctx.db,
     config: ctx.config,
-    embedding: ctx.embedding,
-    rerank: ctx.rerank,
+    embedding: ctx.ragModels.embeddingFor(userId, ctx.embedding),
+    rerank: ctx.ragModels.rerankFor(userId, ctx.rerank),
     gateway: ctx.gateway,
   };
 }
@@ -70,7 +72,7 @@ export function createChatRoutes(ctx: ChatRouteContext): FastifyPluginAsync {
         const onClose = (): void => { if (!reply.raw.writableEnded) controller.abort(); };
         reply.raw.on('close', onClose);
         try {
-        const result = await ask(contextOf(ctx), {
+        const result = await ask(contextOf(ctx, request.userId), {
           userId: request.userId,
           query,
           libraryId: body.libraryId ?? null,
@@ -123,7 +125,7 @@ export function createChatRoutes(ctx: ChatRouteContext): FastifyPluginAsync {
 
         try {
           const result = await askStream(
-            contextOf(ctx),
+            contextOf(ctx, request.userId),
             { userId: request.userId, query, libraryId: body.libraryId ?? null, docId: body.docId ?? null, topK: body.topK, signal: controller.signal },
             (delta) => {
               if (delta !== null) send({ type: 'delta', content: delta });

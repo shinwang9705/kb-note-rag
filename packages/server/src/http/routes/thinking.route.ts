@@ -18,6 +18,7 @@ import * as thinkingRepo from '../../repo/thinking.repo.js';
 import { getContextChunks } from '../../repo/chat.repo.js';
 import { createThinkingEngine } from '../../thinking/engine.js';
 import { search } from '../../service/search.service.js';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
 
 export interface ThinkingRouteContext {
   db: DbHandle;
@@ -25,6 +26,7 @@ export interface ThinkingRouteContext {
   embedding: EmbeddingProvider;
   rerank: RerankProvider;
   gateway: ModelGateway;
+  ragModels: RagProviderResolver;
 }
 
 interface RunIdParams {
@@ -40,16 +42,19 @@ function parseId(raw: string | undefined): number | null {
 export function createThinkingRoutes(ctx: ThinkingRouteContext): FastifyPluginAsync {
   const requireAuth = createRequireAuthHook(ctx);
 
-  const engine = createThinkingEngine({
-    db: ctx.db,
-    config: ctx.config,
-    gateway: ctx.gateway,
-    rerank: ctx.rerank,
-    search: (input) => search({ db: ctx.db, config: ctx.config, embedding: ctx.embedding }, input),
-    chatRepo: { getContextChunks },
-    thinkingRepo,
-    logger: null,
-  });
+  const engineFor = (userId: number) => {
+    const embedding = ctx.ragModels.embeddingFor(userId, ctx.embedding);
+    return createThinkingEngine({
+      db: ctx.db,
+      config: ctx.config,
+      gateway: ctx.gateway,
+      rerank: ctx.ragModels.rerankFor(userId, ctx.rerank),
+      search: (input) => search({ db: ctx.db, config: ctx.config, embedding }, input),
+      chatRepo: { getContextChunks },
+      thinkingRepo,
+      logger: null,
+    });
+  };
 
   return async function thinkingRoutes(app) {
     /** GET /api/thinking/runs/:id —— run 详情 + 轮次产物 */
@@ -99,7 +104,7 @@ export function createThinkingRoutes(ctx: ThinkingRouteContext): FastifyPluginAs
         raw.on('close', onClose);
 
         try {
-          await engine.resume(id, request.userId, controller.signal, (event) => send(event));
+          await engineFor(request.userId).resume(id, request.userId, controller.signal, (event) => send(event));
         } catch (error) {
           const code = error instanceof ApiError ? error.code : 'INTERNAL_ERROR';
           const message = error instanceof ApiError ? error.message : '服务器内部错误';

@@ -127,8 +127,8 @@ export default function Dashboard({
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QuickEntry icon="upload" title="上传文档" desc="批量上传或粘贴文本，构建你的知识库" onClick={() => onNavigate('documents')} />
           <QuickEntry icon="search" title="检索知识库" desc="关键词 + 语义混合检索，快速定位原文" onClick={() => onNavigate('search')} />
-          <QuickEntry icon="ask" title="发起提问" desc="基于知识库的 RAG 问答 / 多轮对话" onClick={() => onNavigate('chat')} />
-          <QuickEntry icon="cockpit" title="数据驾驶舱" desc="打开全屏大屏：KPI、趋势、分布与排行" onClick={onOpenCockpit} />
+          <QuickEntry icon="ask" title="发起提问" desc="统一对话工作区：上下文、模型与引用证据" onClick={() => onNavigate('chat')} />
+          <QuickEntry icon="cockpit" title="质量驾驶舱" desc="查看回答质量、知识缺口、任务与索引健康" onClick={onOpenCockpit} />
         </section>
       </Reveal>
 

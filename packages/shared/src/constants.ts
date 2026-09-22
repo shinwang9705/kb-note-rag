@@ -131,6 +131,8 @@ export const RAG_RANGE = {
   rerankTopN: { min: 1, max: 100 },
   rerankTopK: { min: 1, max: 50 },
   confidence: { min: 0, max: 1 },
+  chunkSize: { min: 100, max: 4000 },
+  chunkOverlap: { min: 0, max: 1000 },
 } as const;
 
 /** RAG 运行级默认值（与既有环境变量 / 代码常量保持单一数据源） */
@@ -149,5 +151,12 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   confidence: {
     groundedScore: RERANK_GROUNDED_SCORE,
     partialScore: RERANK_PARTIAL_SCORE,
+  },
+  chunk: {
+    strategy: 'structured',
+    size: DEFAULT_CHUNK_SIZE,
+    overlap: DEFAULT_CHUNK_OVERLAP,
+    breakMode: 'sentence',
+    preserveSectionPath: true,
   },
 };

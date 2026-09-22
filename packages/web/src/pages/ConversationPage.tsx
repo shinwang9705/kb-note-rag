@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiClientError } from '../api/client.js';
-import type { Conversation, GenerationParams, MessageView, ThinkingEvent } from '@kb/shared';
-import { DEFAULT_GENERATION_PARAMS } from '@kb/shared';
+import type { Conversation, GenerationParams, KbScope, Library, MessageView, ProviderInfo, ThinkingEvent } from '@kb/shared';
 import ThinkingTimeline, { type ThinkingRoundView } from '../components/ThinkingTimeline.js';
 
 /**
- * 多轮对话页：会话列表 + 消息流（流式）+ 参数面板 + 停止按钮。
- * thinkingRounds >= 2 时走深度思考（agent）模式，消息流内嵌 ThinkingTimeline。
+ * 统一智能对话页：历史会话 + 消息流 + 知识范围/模型/策略 + 独立证据栏。
+ * “深入”策略走多轮反思 agent；其余策略走普通流式对话。
  * 纯文本渲染（禁止 dangerouslySetInnerHTML），风格对齐 ChatPage/Tailwind。
  * 响应式：会话列表 md:flex（<md 收进抽屉）、参数面板 lg:block（<lg 收进弹出层）。
  */
@@ -29,6 +28,7 @@ const EMPTY_THINKING: ThinkingState = {
   budgetWarning: null,
   aborted: null,
 };
+const STANDARD_PARAMS: GenerationParams = { temperature: 0.35, topP: 0.9, maxTokens: 2048, thinkingRounds: 1 };
 
 interface ConversationPageProps {
   /** 从历史页跳转过来的目标会话 id（可选） */
@@ -46,8 +46,15 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
   const [assistantDraft, setAssistantDraft] = useState('');
   const [trimmedNotice, setTrimmedNotice] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [params, setParams] = useState<GenerationParams>({ ...DEFAULT_GENERATION_PARAMS });
+  const [params, setParams] = useState<GenerationParams>({ ...STANDARD_PARAMS });
   const [kbEnabled, setKbEnabled] = useState(false);
+  const [kbScope, setKbScope] = useState<KbScope | null>(null);
+  const [providerId, setProviderId] = useState('');
+  const [model, setModel] = useState('');
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const [conversationFilter, setConversationFilter] = useState('');
+  const [evidenceMessageId, setEvidenceMessageId] = useState<number | null>(null);
   const [thinking, setThinking] = useState<ThinkingState>(EMPTY_THINKING);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sendLock = useRef(false);
@@ -62,6 +69,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
   // 移动/平板端：会话列表抽屉、参数面板弹出层
   const [listOpen, setListOpen] = useState(false);
   const [paramsOpen, setParamsOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   const agentMode = params.thinkingRounds >= 2;
 
@@ -76,6 +84,18 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
 
   useEffect(() => {
     void refreshConversations();
+    void Promise.all([api.providers(), api.libraries()]).then(([providerResult, libraryResult]) => {
+      const available = providerResult.items.filter((item) => item.configured);
+      setProviders(available);
+      setLibraries(libraryResult.items);
+      const preferred = available.find((item) => item.isDefault) ?? available[0];
+      if (preferred) {
+        setProviderId((current) => current || preferred.id);
+        setModel((current) => current || preferred.models[0]?.id || '');
+      }
+    }).catch(() => {
+      /* 能力列表失败不阻断已有会话 */
+    });
     return () => { streamAbort.current?.abort(); };
   }, []);
 
@@ -110,6 +130,11 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
         setMessages(res.items);
         setParams(detail.item.params);
         setKbEnabled(detail.item.kbEnabled);
+        setKbScope(detail.item.kbScope);
+        setProviderId(detail.item.providerId);
+        setModel(detail.item.model);
+        const latestEvidence = [...res.items].reverse().find((item) => item.role === 'assistant' && item.citations.length > 0);
+        setEvidenceMessageId(latestEvidence?.id ?? null);
         stickToBottom.current = true;
       })
       .catch(() => {
@@ -125,6 +150,9 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
     if (conversation) {
       setParams(conversation.params);
       setKbEnabled(conversation.kbEnabled);
+      setKbScope(conversation.kbScope);
+      setProviderId(conversation.providerId);
+      setModel(conversation.model);
     }
     return () => {
       cancelled = true;
@@ -140,7 +168,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
   const ensureConversation = async (): Promise<number | null> => {
     if (activeId) return activeId;
     try {
-      const res = await api.createConversation({ params, kbEnabled });
+      const res = await api.createConversation({ params, kbEnabled, kbScope, providerId: providerId || undefined, model: model || undefined });
       const conversation = res.item;
       setConversations((prev) => [conversation, ...prev]);
       createdId.current = conversation.id;
@@ -262,7 +290,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
       const id = await ensureConversation();
       if (!id) return;
       // 发出请求前确认服务端参数与界面一致；保存失败不继续生成。
-      await api.patchConversation(id, { params, kbEnabled });
+      await api.patchConversation(id, { params, kbEnabled, kbScope, providerId: providerId || undefined, model: model || undefined });
       setInput('');
       streamAbort.current = new AbortController();
       if (agentMode) {
@@ -323,6 +351,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
         onTrimmed: (droppedCount) => setTrimmedNotice(`已压缩 ${droppedCount} 条较早消息`),
         onDone: (message) => {
           setMessages((prev) => prev.map((item) => (item.id === message.id ? message : item)));
+          if (message.citations.length > 0) setEvidenceMessageId(message.id);
           setAssistantDraft('');
           void refreshConversations();
         },
@@ -421,6 +450,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
     setTrimmedNotice(null);
     setError('');
     setThinking(EMPTY_THINKING);
+    setEvidenceMessageId(null);
   };
 
   const handleDelete = async (id: number): Promise<void> => {
@@ -453,8 +483,49 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
     ).catch(() => { setError('知识库设置保存失败，请重新设置。'); });
   };
 
+  const persistConversationPatch = (patch: Parameters<typeof api.patchConversation>[1], failureMessage: string): void => {
+    if (!activeId) return;
+    settingsQueue.current = settingsQueue.current
+      .then(() => api.patchConversation(activeId, patch))
+      .catch(() => { setError(failureMessage); });
+  };
+
+  const applyStrategy = (strategy: 'fast' | 'standard' | 'deep'): void => {
+    const next: GenerationParams = strategy === 'fast'
+      ? { temperature: 0.2, topP: 0.85, maxTokens: 1024, thinkingRounds: 1 }
+      : strategy === 'deep'
+        ? { temperature: 0.3, topP: 0.9, maxTokens: 4096, thinkingRounds: 3 }
+        : { temperature: 0.35, topP: 0.9, maxTokens: 2048, thinkingRounds: 1 };
+    setParams(next);
+    persistConversationPatch({ params: next }, '回答策略保存失败，请重试。');
+  };
+
+  const changeScope = (value: string): void => {
+    const next = value === 'all' ? null : { libraryId: Number(value.replace('library:', '')) };
+    setKbScope(next);
+    setKbEnabled(true);
+    persistConversationPatch({ kbEnabled: true, kbScope: next }, '知识范围保存失败，请重试。');
+  };
+
+  const changeProvider = (nextProviderId: string): void => {
+    const nextProvider = providers.find((item) => item.id === nextProviderId);
+    const nextModel = nextProvider?.models[0]?.id ?? '';
+    setProviderId(nextProviderId);
+    setModel(nextModel);
+    persistConversationPatch({ providerId: nextProviderId, model: nextModel }, '模型保存失败，请重试。');
+  };
+
+  const evidenceMessage = messages.find((item) => item.id === evidenceMessageId)
+    ?? [...messages].reverse().find((item) => item.role === 'assistant' && item.citations.length > 0)
+    ?? null;
+  const filteredConversations = conversations.filter((item) =>
+    item.title.toLocaleLowerCase().includes(conversationFilter.trim().toLocaleLowerCase()),
+  );
+  const activeProvider = providers.find((item) => item.id === providerId);
+  const strategy = params.thinkingRounds >= 2 ? 'deep' : params.maxTokens <= 1024 ? 'fast' : 'standard';
+
   return (
-    <div className="conversation-workspace flex gap-4">
+    <div className="conversation-workspace flex min-h-[calc(100vh-8rem)] gap-3">
       {/* 会话列表（桌面常驻；移动/平板收进抽屉） */}
       <aside className="hidden w-64 shrink-0 flex-col rounded-card border border-line bg-surface shadow-card md:flex">
         <div className="border-b border-line p-3">
@@ -466,13 +537,17 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
           >
             新建对话
           </button>
+          <label className="mt-3 block">
+            <span className="sr-only">搜索历史对话</span>
+            <input value={conversationFilter} onChange={(event) => setConversationFilter(event.target.value)} placeholder="搜索历史对话" className="w-full rounded-control border border-line bg-bg px-3 py-2 text-xs text-ink outline-none focus:border-primary-500" />
+          </label>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {conversations.length === 0 ? (
+          {filteredConversations.length === 0 ? (
             <p className="p-4 text-sm text-muted">暂无对话，点击上方新建</p>
           ) : (
             <ul className="divide-y divide-line">
-              {conversations.map((conversation) => (
+              {filteredConversations.map((conversation) => (
                 <li key={conversation.id} className="flex items-center gap-2 px-3 py-2">
                   <button
                     type="button"
@@ -502,7 +577,8 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
 
       {/* 消息流 + 输入 */}
       <section className="flex min-w-0 flex-1 flex-col rounded-card border border-line bg-surface shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+        <div className="space-y-3 border-b border-line px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -511,20 +587,32 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
             >
               会话
             </button>
-            <h2 className="text-base font-medium">多轮对话</h2>
+            <div><h2 className="text-base font-semibold text-ink">智能对话</h2><p className="text-xs text-muted">直接提问，系统会自动保留上下文并展示证据</p></div>
           </div>
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-muted">
               <input type="checkbox" checked={kbEnabled} disabled={streaming || loading} onChange={toggleKb} className="accent-primary-600" />
-              挂载知识库
+              使用知识库
             </label>
             <button
               type="button"
               onClick={() => setParamsOpen(true)}
               className="rounded-control border border-line px-2.5 py-1 text-xs text-ink hover:bg-secondary-100 lg:hidden"
             >
-              参数
+              高级设置
             </button>
+          </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <select aria-label="知识范围" value={kbScope?.libraryId ? `library:${kbScope.libraryId}` : 'all'} onChange={(event) => changeScope(event.target.value)} disabled={streaming || !kbEnabled} className="rounded-control border border-line bg-surface px-2.5 py-1.5 text-ink disabled:opacity-50">
+              <option value="all">全部知识库</option>
+              {libraries.map((library) => <option key={library.id} value={`library:${library.id}`}>{library.name}</option>)}
+            </select>
+            {providers.length > 0 ? <select aria-label="模型供应商" value={providerId} onChange={(event) => changeProvider(event.target.value)} disabled={streaming} className="rounded-control border border-line bg-surface px-2.5 py-1.5 text-ink">{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.displayName}</option>)}</select> : null}
+            {activeProvider && activeProvider.models.length > 0 ? <select aria-label="模型" value={model} onChange={(event) => { setModel(event.target.value); persistConversationPatch({ model: event.target.value }, '模型保存失败，请重试。'); }} disabled={streaming} className="max-w-48 rounded-control border border-line bg-surface px-2.5 py-1.5 text-ink">{activeProvider.models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select> : null}
+            <div className="flex rounded-control border border-line bg-secondary-50 p-0.5" aria-label="回答策略">
+              {(['fast', 'standard', 'deep'] as const).map((item) => <button key={item} type="button" onClick={() => applyStrategy(item)} disabled={streaming} className={`rounded px-2.5 py-1 ${strategy === item ? 'bg-surface font-medium text-primary-700 shadow-sm' : 'text-muted'}`}>{item === 'fast' ? '快速' : item === 'deep' ? '深入' : '标准'}</button>)}
+            </div>
           </div>
         </div>
 
@@ -539,9 +627,7 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
             </div>
           ) : null}
           {messages.length === 0 && !streaming && !loading && !loadFailed ? (
-            <p className="py-8 text-center text-sm text-muted">
-              开始一段新对话吧。多轮对话会记住上文，你可以在右侧调节参数。
-            </p>
+            <div className="mx-auto max-w-xl py-12 text-center"><div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-100 text-xl text-primary-700">✦</div><h3 className="font-semibold text-ink">从你的知识开始提问</h3><p className="mt-2 text-sm text-muted">可总结文档、对比观点、定位证据，也可以进行普通对话。</p><div className="mt-5 flex flex-wrap justify-center gap-2">{['总结知识库中的核心内容', '不同文档有哪些共同观点？', '帮我查找相关依据'].map((prompt) => <button key={prompt} type="button" onClick={() => setInput(prompt)} className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:border-primary-300 hover:text-primary-700">{prompt}</button>)}</div></div>
           ) : null}
           {messages.map((message) => {
             const isUser = message.role === 'user';
@@ -551,30 +637,13 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
                 <div className="min-w-0 max-w-[92%] sm:max-w-[85%]">
                   <p className={`mb-1.5 text-xs text-muted ${isUser ? 'text-right' : ''}`}>{isUser ? '你' : '知识库助手'}</p>
                   <div
+                    onClick={() => { if (!isUser && message.citations.length > 0) { setEvidenceMessageId(message.id); setEvidenceOpen(true); } }}
                     className={`message-bubble rounded-card px-4 py-3 text-sm leading-7 ${isUser ? 'message-bubble-user' : ''}`}
                   >
                     {text || (message.status === 'streaming' ? (agentMode ? '深度思考中…' : '思考中…') : '')}
                   </div>
                   {message.status === 'failed' || message.status === 'aborted' ? <p className="mt-1 text-xs text-warning-700">{message.status === 'aborted' ? '已停止生成' : '生成未完成，已保留部分内容'}</p> : null}
-                  {!isUser && message.citations.length > 0 ? (
-                    <div className="mt-2 space-y-1.5">
-                      {message.citations.map((citation, index) => (
-                        <div
-                          key={`${citation.chunkId}-${index}`}
-                          className="rounded-card border border-line bg-surface px-3 py-2"
-                        >
-                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                            <span className="font-medium text-ink">{citation.docTitle}</span>
-                            {onOpenDocument ? <button type="button" onClick={() => onOpenDocument(citation.docId)} className="text-primary-600 hover:underline">查看原文</button> : null}
-                            {citation.sectionPath ? (
-                              <span className="text-muted">› {citation.sectionPath}</span>
-                            ) : null}
-                          </div>
-                          <p className="mt-0.5 text-xs leading-relaxed text-muted">{citation.snippet}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
+                  {!isUser ? <div className="mt-1.5 flex items-center gap-3 text-xs text-muted"><button type="button" onClick={() => void navigator.clipboard?.writeText(text)} className="hover:text-primary-700">复制</button>{message.citations.length > 0 ? <button type="button" onClick={() => { setEvidenceMessageId(message.id); setEvidenceOpen(true); }} className="font-medium text-primary-700 hover:underline">{message.citations.length} 条证据</button> : null}</div> : null}
                 </div>
               </div>
             );
@@ -641,10 +710,13 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
         </div>
       </section>
 
-      {/* 参数面板（桌面常驻；<lg 收进弹出层） */}
-      <aside className="hidden w-60 shrink-0 rounded-card border border-line bg-surface p-4 shadow-card lg:block">
-        <h3 className="mb-4 text-sm font-medium text-ink">参数面板</h3>
-        <div className="space-y-5">
+      {/* 证据栏：把引用从消息正文中分离，便于核对而不打断阅读。 */}
+      <aside className="hidden w-72 shrink-0 overflow-hidden rounded-card border border-line bg-surface shadow-card xl:flex xl:flex-col">
+        <div className="border-b border-line px-4 py-3"><h3 className="text-sm font-semibold text-ink">回答依据</h3><p className="mt-0.5 text-xs text-muted">点击回答可切换对应证据</p></div>
+        <div className="flex-1 overflow-y-auto p-3"><EvidenceCards message={evidenceMessage} onOpenDocument={onOpenDocument} /></div>
+        <details className="border-t border-line p-3">
+          <summary className="cursor-pointer text-xs font-medium text-muted">高级生成参数</summary>
+          <div className="mt-4 space-y-5">
           <ParamSlider
             label="temperature"
             value={params.temperature}
@@ -681,11 +753,11 @@ export default function ConversationPage({ targetConversationId, onConsumedTarge
             disabled={streaming}
             onChange={(value) => updateParam('thinkingRounds', value)}
           />
-          <p className="text-xs text-muted">
-            {agentMode ? 'thinkingRounds ≥ 2：走深度思考（多轮反思）' : 'thinkingRounds = 1：普通多轮对话'}
-          </p>
-        </div>
+          </div>
+        </details>
       </aside>
+
+      {evidenceOpen ? <div className="fixed inset-0 z-40 xl:hidden"><div className="absolute inset-0 bg-black/40" onClick={() => setEvidenceOpen(false)} aria-hidden="true" /><aside className="absolute inset-y-0 right-0 flex w-[min(88vw,22rem)] flex-col border-l border-line bg-surface shadow-modal"><div className="flex items-center justify-between border-b border-line p-4"><div><h3 className="text-sm font-semibold text-ink">回答依据</h3><p className="text-xs text-muted">引用片段与原文入口</p></div><button type="button" onClick={() => setEvidenceOpen(false)} className="text-xl text-muted" aria-label="关闭证据">×</button></div><div className="flex-1 overflow-y-auto p-3"><EvidenceCards message={evidenceMessage} onOpenDocument={onOpenDocument} /></div></aside></div> : null}
 
       {/* 移动/平板：会话列表抽屉 */}
       {listOpen ? (
@@ -827,6 +899,11 @@ interface ParamSliderProps {
   step: number;
   disabled?: boolean;
   onChange: (value: number) => void;
+}
+
+function EvidenceCards({ message, onOpenDocument }: { message: MessageView | null; onOpenDocument?: (docId: number) => void }) {
+  if (!message?.citations.length) return <div className="py-10 text-center text-xs leading-5 text-muted">当前回答暂无知识库证据。<br />开启知识库并选择范围后再提问。</div>;
+  return <div className="space-y-3">{message.citations.map((citation, index) => <article key={`${citation.chunkId}-${index}`} className="rounded-card border border-line bg-bg p-3"><div className="flex items-start justify-between gap-2"><div><span className="mr-1 text-xs font-semibold text-primary-700">[{index + 1}]</span><span className="text-xs font-medium text-ink">{citation.docTitle}</span></div>{onOpenDocument ? <button type="button" onClick={() => onOpenDocument(citation.docId)} className="shrink-0 text-xs text-primary-700 hover:underline">原文</button> : null}</div>{citation.sectionPath ? <p className="mt-1 text-[11px] text-muted">{citation.sectionPath}</p> : null}<p className="mt-2 line-clamp-5 text-xs leading-5 text-muted">{citation.snippet}</p></article>)}</div>;
 }
 
 function ParamSlider({ label, value, min, max, step, disabled, onChange }: ParamSliderProps) {

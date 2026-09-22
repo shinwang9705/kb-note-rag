@@ -11,12 +11,12 @@
 import { readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { DocumentStatus } from '@kb/shared';
+import type { DocumentStatus, RagChunkSettings } from '@kb/shared';
 import type { AppConfig } from '../config.js';
 import type { DbHandle } from '../db/connection.js';
 import { ApiError } from '../http/errors.js';
 import { ParseError, extOf, isSupportedExt, parseDocument } from '../parser/index.js';
-import { chunkTextStructured, type TextChunk } from '../util/text.js';
+import { chunkText, chunkTextStructured, type TextChunk } from '../util/text.js';
 import { ensureDir, safeJoin, sanitizeFileName, userUploadDir } from '../util/fs.js';
 import {
   countDocuments,
@@ -46,6 +46,7 @@ export interface IngestContext {
   db: DbHandle;
   config: AppConfig;
   embedding: EmbeddingProvider;
+  chunk?: RagChunkSettings;
   logger?: EmbeddingLogger | null;
 }
 
@@ -178,10 +179,9 @@ async function runParse(ctx: IngestContext, task: IngestTaskRow, input: {
 /** 分块（结构感知：按标题/段落优先切割 + 章节路径） */
 function runChunk(ctx: IngestContext, task: IngestTaskRow, text: string): TextChunk[] {
   updateIngestTask(ctx.db, task.user_id, task.id, { stage: INGEST_STAGE.CHUNK, progress: 45 });
-  const chunks = chunkTextStructured(text, {
-    size: ctx.config.chunk.size,
-    overlap: ctx.config.chunk.overlap,
-  });
+  const rule = ctx.chunk ?? { strategy: 'structured', size: ctx.config.chunk.size, overlap: ctx.config.chunk.overlap, breakMode: 'sentence', preserveSectionPath: true };
+  const chunkOptions = { size: rule.size, overlap: rule.overlap, breakMode: rule.breakMode, preserveSectionPath: rule.preserveSectionPath } as const;
+  const chunks = rule.strategy === 'sliding' ? chunkText(text, chunkOptions) : chunkTextStructured(text, chunkOptions);
   if (chunks.length === 0) {
     throw ParseError.empty('文档中没有可检索的文本内容');
   }

@@ -9,16 +9,11 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import * as echarts from 'echarts/core';
-import { BarChart, GaugeChart, LineChart, PieChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsCoreOption, EChartsType } from 'echarts/core';
 
 echarts.use([
-  BarChart,
-  GaugeChart,
-  LineChart,
-  PieChart,
   GridComponent,
   LegendComponent,
   TooltipComponent,

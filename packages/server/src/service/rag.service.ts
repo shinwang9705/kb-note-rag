@@ -7,6 +7,7 @@
  */
 import type {
   RagConfidenceSettings,
+  RagChunkSettings,
   RagContextSettings,
   RagRerankSettings,
   RagSearchMode,
@@ -20,7 +21,6 @@ import {
   DEFAULT_CHUNK_OVERLAP,
   DEFAULT_CHUNK_SIZE,
   DEFAULT_RAG_SETTINGS,
-  DEFAULT_RERANK_PROVIDER,
   RAG_RANGE,
 } from '@kb/shared';
 import type { AppConfig } from '../config.js';
@@ -45,6 +45,8 @@ export interface RagStatusContext extends RagResolveContext {
 }
 
 const RAG_SEARCH_MODES: readonly string[] = ['auto', 'hybrid', 'keyword', 'vector'];
+const CHUNK_STRATEGIES: readonly string[] = ['structured', 'sliding'];
+const CHUNK_BREAK_MODES: readonly string[] = ['sentence', 'fixed'];
 
 /** defaultMode 非法值一律回退 'auto'（字符串之外的类型也视为非法） */
 function normalizeMode(value: unknown): RagSearchMode {
@@ -101,6 +103,9 @@ export function normalizeRagSettings(partial?: RagSettingsPatch | null): RagSett
   const c: Partial<RagContextSettings> = p.context ?? {};
   const r: Partial<RagRerankSettings> = p.rerank ?? {};
   const cf: Partial<RagConfidenceSettings> = p.confidence ?? {};
+  const ch: Partial<RagChunkSettings> = p.chunk ?? {};
+  const size = clampInt(ch.size, RAG_RANGE.chunkSize.min, RAG_RANGE.chunkSize.max, DEFAULT_RAG_SETTINGS.chunk.size);
+  const overlap = Math.min(size - 1, clampInt(ch.overlap, RAG_RANGE.chunkOverlap.min, RAG_RANGE.chunkOverlap.max, DEFAULT_RAG_SETTINGS.chunk.overlap));
   return {
     search: {
       topK: clampInt(s.topK, RAG_RANGE.searchTopK.min, RAG_RANGE.searchTopK.max, DEFAULT_RAG_SETTINGS.search.topK),
@@ -118,6 +123,13 @@ export function normalizeRagSettings(partial?: RagSettingsPatch | null): RagSett
     confidence: {
       groundedScore: clampFloat(cf.groundedScore, RAG_RANGE.confidence.min, RAG_RANGE.confidence.max, DEFAULT_RAG_SETTINGS.confidence.groundedScore),
       partialScore: clampFloat(cf.partialScore, RAG_RANGE.confidence.min, RAG_RANGE.confidence.max, DEFAULT_RAG_SETTINGS.confidence.partialScore),
+    },
+    chunk: {
+      strategy: typeof ch.strategy === 'string' && CHUNK_STRATEGIES.includes(ch.strategy) ? ch.strategy as RagChunkSettings['strategy'] : DEFAULT_RAG_SETTINGS.chunk.strategy,
+      size,
+      overlap,
+      breakMode: typeof ch.breakMode === 'string' && CHUNK_BREAK_MODES.includes(ch.breakMode) ? ch.breakMode as RagChunkSettings['breakMode'] : DEFAULT_RAG_SETTINGS.chunk.breakMode,
+      preserveSectionPath: typeof ch.preserveSectionPath === 'boolean' ? ch.preserveSectionPath : DEFAULT_RAG_SETTINGS.chunk.preserveSectionPath,
     },
   };
 }
@@ -143,6 +155,13 @@ export function getRagSettings(ctx: RagServiceContext, userId: number): RagSetti
     confidence: {
       groundedScore: firstNumber(stored.confidence?.groundedScore, DEFAULT_RAG_SETTINGS.confidence.groundedScore),
       partialScore: firstNumber(stored.confidence?.partialScore, DEFAULT_RAG_SETTINGS.confidence.partialScore),
+    },
+    chunk: {
+      strategy: stored.chunk?.strategy ?? DEFAULT_RAG_SETTINGS.chunk.strategy,
+      size: firstNumber(stored.chunk?.size, config.chunk.size, DEFAULT_RAG_SETTINGS.chunk.size),
+      overlap: firstNumber(stored.chunk?.overlap, config.chunk.overlap, DEFAULT_RAG_SETTINGS.chunk.overlap),
+      breakMode: stored.chunk?.breakMode ?? DEFAULT_RAG_SETTINGS.chunk.breakMode,
+      preserveSectionPath: typeof stored.chunk?.preserveSectionPath === 'boolean' ? stored.chunk.preserveSectionPath : DEFAULT_RAG_SETTINGS.chunk.preserveSectionPath,
     },
   };
   return normalizeRagSettings(raw);
@@ -172,14 +191,14 @@ export function ragStatus(ctx: RagStatusContext, userId: number): RagStatus {
   const resolved = resolveRagParams(ctx, userId);
   // 结构级参数仅在偏离默认时给出提示；默认态 = 空数组（T04 条件化）
   const structuralHint: string[] = [];
-  if (ctx.embedding.kind !== 'local') {
-    structuralHint.push('embedding.provider 需重启生效');
+  if (!ctx.embedding.available) {
+    structuralHint.push('Embedding 当前不可用，检索将自动降级为关键词模式');
   }
-  if (ctx.rerank.kind !== DEFAULT_RERANK_PROVIDER) {
-    structuralHint.push('rerank.provider 需重启生效');
+  if (!ctx.rerank.available) {
+    structuralHint.push('Rerank 当前不可用，候选证据将保持召回顺序');
   }
-  if (ctx.config.chunk.size !== DEFAULT_CHUNK_SIZE || ctx.config.chunk.overlap !== DEFAULT_CHUNK_OVERLAP) {
-    structuralHint.push('chunk.size/overlap 修改后需重建索引');
+  if (effective.chunk.size !== DEFAULT_CHUNK_SIZE || effective.chunk.overlap !== DEFAULT_CHUNK_OVERLAP || effective.chunk.strategy !== 'structured' || effective.chunk.breakMode !== 'sentence' || !effective.chunk.preserveSectionPath) {
+    structuralHint.push('分块规则已自定义；新文档立即生效，已有文档需重建索引');
   }
   if (!ctx.db.vecAvailable) {
     structuralHint.push('语义检索不可用：sqlite-vec 未装载');
@@ -197,7 +216,7 @@ export function ragStatus(ctx: RagStatusContext, userId: number): RagStatus {
       available: ctx.rerank.available,
     },
     vecAvailable: ctx.db.vecAvailable,
-    chunk: { size: ctx.config.chunk.size, overlap: ctx.config.chunk.overlap },
+    chunk: effective.chunk,
     effective,
     resolved,
     structuralHint,

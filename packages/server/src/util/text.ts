@@ -25,6 +25,10 @@ export interface ChunkOptions {
   size?: number;
   /** 重叠字符数，必须小于 size */
   overlap?: number;
+  /** sentence 尽量在句末回退；fixed 严格按窗口切分 */
+  breakMode?: 'sentence' | 'fixed';
+  /** 结构化分块是否保留章节路径 */
+  preserveSectionPath?: boolean;
 }
 
 const DEFAULT_SIZE = 700;
@@ -58,7 +62,7 @@ export function chunkText(text: string, options: ChunkOptions = {}): TextChunk[]
     let end = Math.min(start + size, total);
 
     // 不在文末时，尽量回退到最近的句读处，避免切断句子
-    if (end < total) {
+    if (end < total && options.breakMode !== 'fixed') {
       const window = source.slice(start, end);
       let breakAt = -1;
       for (let i = window.length - 1; i >= Math.floor(window.length * 0.6); i -= 1) {
@@ -178,13 +182,13 @@ export function chunkTextStructured(text: string, options: ChunkOptions = {}): T
   let seq = 0;
   for (const paragraph of paragraphs) {
     const sub = source.slice(paragraph.start, paragraph.end);
-    for (const part of chunkText(sub, { size, overlap })) {
+    for (const part of chunkText(sub, { size, overlap, breakMode: options.breakMode })) {
       chunks.push({
         seq,
         content: part.content,
         charStart: paragraph.start + part.charStart,
         charEnd: paragraph.start + part.charEnd,
-        ...(paragraph.path.length > 0 ? { sectionPath: paragraph.path } : {}),
+        ...(options.preserveSectionPath !== false && paragraph.path.length > 0 ? { sectionPath: paragraph.path } : {}),
       });
       seq += 1;
     }

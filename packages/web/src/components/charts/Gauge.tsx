@@ -3,8 +3,11 @@
  * 每个配额项一个 gauge；>=80% 黄、>=95% 红（语义色读 CSS 变量，cockpit 用 --chart-* 深色色板）。
  */
 import { useMemo } from 'react';
-import type { EChartsCoreOption } from 'echarts/core';
+import { use, type EChartsCoreOption } from 'echarts/core';
+import { GaugeChart } from 'echarts/charts';
 import { chartPalette, EChartsBase, useThemeVersion, type ChartPalette, type ChartVariant } from './EChartsBase.js';
+
+use([GaugeChart]);
 
 export interface GaugeItem {
   label: string;

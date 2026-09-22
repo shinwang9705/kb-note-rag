@@ -26,11 +26,13 @@ import {
 } from '../../repo/share.repo.js';
 import { buildShareUrl, generateShareToken, resolveShareScope } from '../../service/share.service.js';
 import { search } from '../../service/search.service.js';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
 
 export interface ShareRouteContext {
   db: DbHandle;
   config: AppConfig;
   embedding: EmbeddingProvider;
+  ragModels: RagProviderResolver;
 }
 
 interface LibraryIdParams {
@@ -168,7 +170,7 @@ export function createShareRoutes(ctx: ShareRouteContext): FastifyPluginAsync {
         if (!query) throw ApiError.badRequest('查询不能为空');
 
         const result = await search(
-          { db: ctx.db, config: ctx.config, embedding: ctx.embedding },
+          { db: ctx.db, config: ctx.config, embedding: ctx.ragModels.embeddingFor(scope.ownerUserId, ctx.embedding) },
           {
             userId: scope.ownerUserId,
             query,

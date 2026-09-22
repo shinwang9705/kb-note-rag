@@ -25,6 +25,7 @@ import {
   type ConversationServiceContext,
 } from '../../service/conversation.service.js';
 import type { ConversationMode, GenerationParams, KbScope } from '@kb/shared';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
 
 export interface ConversationRouteContext {
   db: DbHandle;
@@ -32,6 +33,7 @@ export interface ConversationRouteContext {
   embedding: EmbeddingProvider;
   rerank: RerankProvider;
   gateway: ModelGateway;
+  ragModels: RagProviderResolver;
 }
 
 interface ConvIdParams {
@@ -64,12 +66,12 @@ interface SendMessageBody {
   mode?: ConversationMode;
 }
 
-function serviceCtx(ctx: ConversationRouteContext): ConversationServiceContext {
+function serviceCtx(ctx: ConversationRouteContext, userId: number): ConversationServiceContext {
   return {
     db: ctx.db,
     config: ctx.config,
-    embedding: ctx.embedding,
-    rerank: ctx.rerank,
+    embedding: ctx.ragModels.embeddingFor(userId, ctx.embedding),
+    rerank: ctx.ragModels.rerankFor(userId, ctx.rerank),
     gateway: ctx.gateway,
   };
 }
@@ -122,7 +124,7 @@ export function createConversationRoutes(ctx: ConversationRouteContext): Fastify
               },
               kbEnabled: { type: 'boolean' },
               kbScope: {
-                type: 'object',
+                type: ['object', 'null'],
                 additionalProperties: false,
                 properties: {
                   libraryId: { type: ['integer', 'null'] },
@@ -135,7 +137,7 @@ export function createConversationRoutes(ctx: ConversationRouteContext): Fastify
       },
       async (request: FastifyRequest<{ Body: CreateConversationBody }>) => {
         const body = request.body ?? {};
-        const conversation = createConversation(serviceCtx(ctx), {
+        const conversation = createConversation(serviceCtx(ctx, request.userId), {
           userId: request.userId,
           title: body.title,
           mode: body.mode,
@@ -204,7 +206,7 @@ export function createConversationRoutes(ctx: ConversationRouteContext): Fastify
                 },
               },
               kbScope: {
-                type: 'object',
+                type: ['object', 'null'],
                 additionalProperties: false,
                 properties: {
                   libraryId: { type: ['integer', 'null'] },
@@ -219,7 +221,7 @@ export function createConversationRoutes(ctx: ConversationRouteContext): Fastify
         const id = parseId(request.params.id);
         if (id === null) throw ApiError.badRequest('非法的 id');
         const body = request.body ?? {};
-        const conversation = patchConversation(serviceCtx(ctx), {
+        const conversation = patchConversation(serviceCtx(ctx, request.userId), {
           userId: request.userId,
           conversationId: id,
           title: body.title,
@@ -310,7 +312,7 @@ export function createConversationRoutes(ctx: ConversationRouteContext): Fastify
 
         try {
           await sendMessage(
-            serviceCtx(ctx),
+            serviceCtx(ctx, request.userId),
             { userId: request.userId, conversationId: id, content, mode: body.mode },
             (event) => send(event),
           );

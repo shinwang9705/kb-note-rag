@@ -29,6 +29,8 @@ import { createHistoryRoutes } from './http/routes/history.route.js';
 import { createAdminRoutes } from './http/routes/admin.route.js';
 import { createStatsRoutes } from './http/routes/stats.route.js';
 import { createShareRoutes } from './http/routes/share.route.js';
+import { startBackgroundWorker } from './service/background-worker.js';
+import { RagProviderResolver } from './service/rag-model.service.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -79,6 +81,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     debug: (message: string) => logger.debug(message),
   };
   const gateway: ModelGateway = options.gateway ?? createModelGateway({ db, config, logger: gatewayLogger });
+  const ragModels = new RagProviderResolver({ db, config, logger });
 
   // 全局可选鉴权：任何请求都尝试解析 token，业务路由再用 requireAuth 强制
   app.addHook('onRequest', createOptionalAuthHook(ctx));
@@ -95,18 +98,23 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(createMetaRoutes({ db, config, startedAt, embedding, rerank, gateway }));
   await app.register(createAuthRoutes(ctx));
   await app.register(createLibraryRoutes(ctx));
-  await app.register(createDocumentRoutes({ db, config, embedding }));
-  await app.register(createSearchRoutes({ db, config, embedding }));
-  await app.register(createChatRoutes({ db, config, embedding, rerank, gateway }));
-  await app.register(createConversationRoutes({ db, config, embedding, rerank, gateway }));
-  await app.register(createThinkingRoutes({ db, config, embedding, rerank, gateway }));
+  await app.register(createDocumentRoutes({ db, config, embedding, ragModels }));
+  await app.register(createSearchRoutes({ db, config, embedding, ragModels }));
+  await app.register(createChatRoutes({ db, config, embedding, rerank, gateway, ragModels }));
+  await app.register(createConversationRoutes({ db, config, embedding, rerank, gateway, ragModels }));
+  await app.register(createThinkingRoutes({ db, config, embedding, rerank, gateway, ragModels }));
   await app.register(createProviderRoutes({ db, config, gateway }));
   await app.register(createSettingsRoutes({ db, config }));
-  await app.register(createRagRoutes({ db, config, embedding, rerank }));
+  await app.register(createRagRoutes({ db, config, embedding, rerank, ragModels }));
   await app.register(createHistoryRoutes({ db, config }));
   await app.register(createAdminRoutes({ db, config }));
   await app.register(createStatsRoutes({ db, config }));
-  await app.register(createShareRoutes({ db, config, embedding }));
+  await app.register(createShareRoutes({ db, config, embedding, ragModels }));
+
+  if (config.env !== 'test') {
+    const worker = startBackgroundWorker({ db, config, embedding, logger, ragModels });
+    app.addHook('onClose', async () => { worker.stop(); });
+  }
 
   // 实例的实际 logger 类型是 pino.Logger，此处收敛为 Fastify 默认类型
   return app as unknown as FastifyInstance;

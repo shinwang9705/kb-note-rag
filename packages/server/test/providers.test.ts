@@ -10,6 +10,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { makeTempDir, setTestEnv, makeCall, uniqueUsername, PASSWORD, type Caller } from './harness.ts';
 import { createMockGateway, createTestAppWithGateway, type MockGateway } from './mock-gateway.ts';
 import { decryptSecret } from '../src/util/secret-crypto.js';
@@ -28,11 +29,12 @@ const userB = uniqueUsername('prv_b');
 let tokenA = '';
 let tokenB = '';
 let userIdA = 0;
+const invalidApiKey = randomBytes(18).toString('base64url');
 
 before(async () => {
   mock = createMockGateway({
     testImpl: async (_pid, apiKey) =>
-      apiKey === 'bad-key'
+      apiKey === invalidApiKey
         ? { ok: false, error: { kind: 'auth', userMessage: '密钥无效', retryable: false } }
         : { ok: true },
   });
@@ -65,7 +67,7 @@ test('能力目录：返回 4 家内置厂商及模型', async () => {
 });
 
 test('凭据密文：PUT 后 DB 无明文、可解密、maskedKey 只露尾 4 位', async () => {
-  const key = ['sk', 'test-placeholder'].join('-');
+  const key = randomBytes(24).toString('base64url');
   const put = await call('PUT', '/api/providers/deepseek/credentials', { token: tokenA, payload: { apiKey: key } });
   assert.equal(put.status, 200);
   assert.equal(put.body.data.configured, true);
@@ -87,11 +89,11 @@ test('凭据密文：PUT 后 DB 无明文、可解密、maskedKey 只露尾 4 �
 });
 
 test('连通性测试：有效 Key ok:true、无效 Key ok:false + 归一化错误', async () => {
-  const good = await call('POST', '/api/providers/deepseek/test', { token: tokenA, payload: { apiKey: 'sk-valid' } });
+  const good = await call('POST', '/api/providers/deepseek/test', { token: tokenA, payload: { apiKey: randomBytes(24).toString('base64url') } });
   assert.equal(good.status, 200);
   assert.equal(good.body.data.ok, true);
 
-  const bad = await call('POST', '/api/providers/deepseek/test', { token: tokenA, payload: { apiKey: 'bad-key' } });
+  const bad = await call('POST', '/api/providers/deepseek/test', { token: tokenA, payload: { apiKey: invalidApiKey } });
   assert.equal(bad.status, 200);
   assert.equal(bad.body.data.ok, false);
   assert.equal(bad.body.data.error.kind, 'auth');
@@ -116,7 +118,7 @@ test('越权隔离：B 看不到 A 的凭据，B DELETE 不影响 A', async () =
 });
 
 test('未知供应商 -> 404 PROVIDER_UNKNOWN', async () => {
-  const res = await call('PUT', '/api/providers/unknown-xyz/credentials', { token: tokenA, payload: { apiKey: 'sk-1' } });
+  const res = await call('PUT', '/api/providers/unknown-xyz/credentials', { token: tokenA, payload: { apiKey: randomBytes(24).toString('base64url') } });
   assert.equal(res.status, 404);
   assert.equal(res.body.code, 'PROVIDER_UNKNOWN');
 });

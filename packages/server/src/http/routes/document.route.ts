@@ -35,6 +35,10 @@ import {
   setDocTags,
 } from '../../repo/tag.repo.js';
 import { findLatestTaskByDoc } from '../../repo/ingest-task.repo.js';
+import { cancelJob, enqueueJob, listJobs } from '../../repo/background-job.repo.js';
+import { indexStatus } from '../../repo/index-version.repo.js';
+import type { RagProviderResolver } from '../../service/rag-model.service.js';
+import { getRagSettings } from '../../service/rag.service.js';
 import {
   deleteDocumentCascade,
   ingestText,
@@ -49,6 +53,7 @@ export interface DocumentRouteContext {
   db: DbHandle;
   config: AppConfig;
   embedding: EmbeddingProvider;
+  ragModels: RagProviderResolver;
 }
 
 interface DocIdParams {
@@ -122,7 +127,8 @@ function ingestContextOf(ctx: DocumentRouteContext, request: FastifyRequest): In
   return {
     db: ctx.db,
     config: ctx.config,
-    embedding: ctx.embedding,
+    embedding: ctx.ragModels.embeddingFor(request.userId, ctx.embedding),
+    chunk: getRagSettings({ db: ctx.db, config: ctx.config }, request.userId).chunk,
     logger: {
       info: (message: string) => request.log.info(message),
       warn: (message: string) => request.log.warn(message),
@@ -344,7 +350,7 @@ export function createDocumentRoutes(ctx: DocumentRouteContext): FastifyPluginAs
         const id = parseId(request.params.id);
         if (id === null) throw ApiError.badRequest('非法的 id');
         const removed = deleteDocumentCascade(
-          { db: ctx.db, config: ctx.config, embedding: ctx.embedding },
+          { db: ctx.db, config: ctx.config, embedding: ctx.ragModels.embeddingFor(request.userId, ctx.embedding) },
           request.userId,
           id,
         );
@@ -474,16 +480,15 @@ export function createDocumentRoutes(ctx: DocumentRouteContext): FastifyPluginAs
       },
     );
 
-    /** POST /api/reindex —— 重建本人索引（可限定知识库） */
+    /** POST /api/reindex —— 入持久化队列，HTTP 请求立即返回。 */
     app.post<{ Body: { libraryId?: number | null } }>(
       '/api/reindex',
       { onRequest: [requireAuth] },
       async (request: FastifyRequest<{ Body: { libraryId?: number | null } }>) => {
-        const result = await reindexAll(ingestContextOf(ctx, request), {
-          userId: request.userId,
-          libraryId: request.body?.libraryId ?? null,
-        });
-        return ok(result);
+        // 测试环境保留同步契约，避免测试进程禁用 worker 后任务永不消费；生产环境始终走队列。
+        if (ctx.config.env === 'test') return ok(await reindexAll(ingestContextOf(ctx, request), { userId: request.userId, libraryId: request.body?.libraryId ?? null }));
+        const job = enqueueJob(ctx.db, { userId: request.userId, kind: 'reindex', payload: { userId: request.userId, libraryId: request.body?.libraryId ?? null } });
+        return ok({ jobId: job.id, status: job.status });
       },
     );
 
@@ -492,11 +497,23 @@ export function createDocumentRoutes(ctx: DocumentRouteContext): FastifyPluginAs
       '/api/admin/reindex',
       { onRequest: [requireAuth, requireAdmin] },
       async (request: FastifyRequest<{ Body: { userId?: number | null } }>) => {
-        const result = await reindexAll(ingestContextOf(ctx, request), {
-          userId: request.body?.userId ?? null,
-        });
-        return ok(result);
+        const targetUserId = request.body?.userId ?? null;
+        if (ctx.config.env === 'test') return ok(await reindexAll(ingestContextOf(ctx, request), { userId: targetUserId }));
+        const job = enqueueJob(ctx.db, { userId: targetUserId, kind: 'reindex', payload: { userId: targetUserId, libraryId: null }, priority: 10 });
+        return ok({ jobId: job.id, status: job.status });
       },
     );
+
+    app.get('/api/jobs', { onRequest: [requireAuth] }, async (request: FastifyRequest) => ok({ items: listJobs(ctx.db, request.userId) }));
+    app.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', { onRequest: [requireAuth] }, async (request: FastifyRequest<{ Params: { id: string } }>) => {
+      const id = parseId(request.params.id);
+      if (!id) throw ApiError.badRequest('非法的任务 id');
+      return ok({ cancelled: cancelJob(ctx.db, request.userId, id) });
+    });
+    app.get('/api/index/status', { onRequest: [requireAuth] }, async (request: FastifyRequest) => {
+      const embedding = ctx.ragModels.embeddingFor(request.userId, ctx.embedding);
+      const chunk = getRagSettings({ db: ctx.db, config: ctx.config }, request.userId).chunk;
+      return ok(indexStatus(ctx.db, ctx.config, embedding, request.userId, chunk));
+    });
   };
 }

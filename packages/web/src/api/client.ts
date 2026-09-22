@@ -10,6 +10,7 @@ import {
   type AskResult,
   type Chunk,
   type Conversation,
+  type ConversationQualityStats,
   type DocTag,
   type Document,
   type DocumentStats,
@@ -21,6 +22,9 @@ import {
   type MessageView,
   type PatchSettingsInput,
   type ProviderInfo,
+  type RagModelCapability,
+  type RagModelConfigView,
+  type SaveRagModelConfigInput,
   type RagStatus,
   type RoundArtifact,
   type SearchHistoryItem,
@@ -342,10 +346,13 @@ export const api = {
   searchHistory: () => request<{ items: SearchHistoryItem[] }>('/api/search/history'),
   clearSearchHistory: () => request<{ cleared: number }>('/api/search/history', { method: 'DELETE' }),
   reindex: (input: { libraryId?: number | null } = {}) =>
-    request<{ docs: number; reindexed: number; failed: Array<{ docId: number; error: string }> }>(
+    request<{ jobId: number; status: string }>(
       '/api/reindex',
       { method: 'POST', body: input },
     ),
+  jobs: () => request<{ items: Array<{ id: number; kind: string; status: string; progress: number; stage: string; message: string | null; created_at: string }> }>('/api/jobs'),
+  cancelJob: (id: number) => request<{ cancelled: boolean }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
+  indexStatus: () => request<{ fingerprint: string; generation: { id: number; status: string; fingerprint: string; activated_at: string | null } | null; readyDocuments: number; trackedDocuments: number; stale: boolean }>('/api/index/status'),
 
   // ---- 统计 ----
   statsUsage: () =>
@@ -358,6 +365,10 @@ export const api = {
   statsTrend: (days = 30) => {
     const params = new URLSearchParams({ days: String(days) });
     return request<StatsTrend>(`/api/stats/trend?${params.toString()}`);
+  },
+  statsConversation: (days = 30) => {
+    const params = new URLSearchParams({ days: String(days) });
+    return request<ConversationQualityStats>(`/api/stats/conversation?${params.toString()}`);
   },
   statsTop: (kind: 'query' | 'doc' = 'query') =>
     request<{ items: TopItem[] }>(`/api/stats/top?kind=${kind}`),
@@ -442,7 +453,11 @@ export const api = {
     params?: Partial<GenerationParams>;
     kbEnabled?: boolean;
     kbScope?: KbScope | null;
-  }) => request<{ item: Conversation }>('/api/conversations', { method: 'POST', body: input }),
+  }) => request<{ item: Conversation }>('/api/conversations', {
+    method: 'POST',
+    // 兼容仍在运行的旧后端：旧 schema 只接受 object，不接受显式 null。
+    body: input.kbScope === null ? { ...input, kbScope: {} } : input,
+  }),
   conversation: (id: number) => request<{ item: Conversation }>(`/api/conversations/${id}`),
   patchConversation: (
     id: number,
@@ -456,7 +471,10 @@ export const api = {
       providerId?: string;
       model?: string;
     },
-  ) => request<{ item: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: patch }),
+  ) => request<{ item: Conversation }>(`/api/conversations/${id}`, {
+    method: 'PATCH',
+    body: patch.kbScope === null ? { ...patch, kbScope: {} } : patch,
+  }),
   deleteConversation: (id: number) =>
     request<{ id: number; removed: boolean }>(`/api/conversations/${id}`, { method: 'DELETE' }),
   conversationMessages: (id: number, query: { limit?: number; beforeSeq?: number } = {}) => {
@@ -622,6 +640,13 @@ export const api = {
   patchSettings: (patch: PatchSettingsInput) =>
     request<{ settings: Settings }>('/api/settings', { method: 'PATCH', body: patch }),
   ragStatus: () => request<RagStatus>('/api/rag/status'),
+  ragModels: () => request<{ items: RagModelConfigView[] }>('/api/rag/models'),
+  saveRagModel: (capability: RagModelCapability, input: SaveRagModelConfigInput) =>
+    request<{ items: RagModelConfigView[] }>(`/api/rag/models/${capability}`, { method: 'PUT', body: input }),
+  testRagModel: (capability: RagModelCapability, input: Partial<SaveRagModelConfigInput>) =>
+    request<{ ok: boolean; message: string }>(`/api/rag/models/${capability}/test`, { method: 'POST', body: input }),
+  resetRagModel: (capability: RagModelCapability) =>
+    request<{ items: RagModelConfigView[] }>(`/api/rag/models/${capability}`, { method: 'DELETE' }),
   historySearch: (input: { keyword: string; from?: string; to?: string; limit?: number; offset?: number }) =>
     request<{ items: HistoryHit[]; total: number }>('/api/history/search', { method: 'POST', body: input }),
 };

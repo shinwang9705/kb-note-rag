@@ -24,11 +24,11 @@ export interface NavItem {
 
 /** P0 工作区（对话为主 CTA） */
 export const P0_NAV: NavItem[] = [
+  { key: 'chat', label: '智能对话', icon: 'chat' },
   { key: 'dashboard', label: '工作台', icon: 'dashboard' },
   { key: 'libraries', label: '知识库', icon: 'libraries' },
   { key: 'documents', label: '文档', icon: 'documents' },
   { key: 'search', label: '检索', icon: 'search' },
-  { key: 'chat', label: '对话', icon: 'chat' },
 ];
 
 /** P1 更多 */

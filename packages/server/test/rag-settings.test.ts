@@ -177,9 +177,9 @@ test('ragStatus：结构级偏离默认时给出对应提示', () => {
     } as never,
     1,
   );
-  assert.ok(status.structuralHint.includes('embedding.provider 需重启生效'));
-  assert.ok(status.structuralHint.includes('rerank.provider 需重启生效'));
-  assert.ok(status.structuralHint.includes('chunk.size/overlap 修改后需重建索引'));
+  assert.ok(status.structuralHint.includes('Embedding 当前不可用，检索将自动降级为关键词模式'));
+  assert.ok(status.structuralHint.includes('Rerank 当前不可用，候选证据将保持召回顺序'));
+  assert.ok(status.structuralHint.includes('分块规则已自定义；新文档立即生效，已有文档需重建索引'));
   assert.ok(status.structuralHint.includes('语义检索不可用：sqlite-vec 未装载'));
 });
 

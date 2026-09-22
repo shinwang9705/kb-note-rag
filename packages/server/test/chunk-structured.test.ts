@@ -53,3 +53,17 @@ test('无标题文档退化为普通分块且无 sectionPath', () => {
     assert.equal(chunk.sectionPath, undefined);
   }
 });
+
+test('固定长度模式不回退到句子边界', () => {
+  const plain = `${'甲'.repeat(150)}。${'乙'.repeat(500)}。`;
+  const sentenceChunks = chunkTextStructured(plain, { size: 200, overlap: 0, breakMode: 'sentence' });
+  const fixedChunks = chunkTextStructured(plain, { size: 200, overlap: 0, breakMode: 'fixed' });
+  assert.notEqual(sentenceChunks[0]?.charEnd, fixedChunks[0]?.charEnd);
+  assert.equal(fixedChunks[0]?.charEnd, 200);
+});
+
+test('可关闭章节路径元数据', () => {
+  const chunks = chunkTextStructured('# 标题\n\n正文内容。', { size: 400, preserveSectionPath: false });
+  assert.equal(chunks[0]?.sectionPath, undefined);
+  assert.ok(chunks[0]?.content.includes('正文内容'));
+});

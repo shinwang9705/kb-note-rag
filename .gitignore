@@ -18,12 +18,22 @@ logs/
 npm-debug.log*
 yarn-error.log*
 
+# 仅保留产品源码，不发布项目过程资料、样例与交付物
+docs/
+deliverables/
+samples/
+spike/
+.workbuddy/
+
+# 数据库、备份与导出数据
+*.db
+*.db-shm
+*.db-wal
+backups/
+exports/
+
 # 编辑器 / 系统
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-# spike 里下载的临时产物
-spike/ext/*.tar.gz
-spike/data/

@@ -9,6 +9,7 @@ import { ApiError, ok } from '../errors.js';
 import { adminUsage, documentStats, usageOf } from '../../repo/usage.repo.js';
 import {
   libraryDist,
+  conversationQuality,
   statusDist,
   topDocs,
   topQueries,
@@ -60,6 +61,16 @@ export function createStatsRoutes(ctx: StatsRouteContext): FastifyPluginAsync {
         const qs = request.query ?? {};
         return ok(trend(ctx.db, request.userId, qs.days ?? 30));
       },
+    );
+
+    app.get<{ Querystring: { days?: number } }>(
+      '/api/stats/conversation',
+      {
+        onRequest: [requireAuth],
+        schema: { querystring: { type: 'object', additionalProperties: false, properties: { days: { type: 'integer', minimum: 1, maximum: 90, default: 30 } } } },
+      },
+      async (request: FastifyRequest<{ Querystring: { days?: number } }>) =>
+        ok(conversationQuality(ctx.db, request.userId, request.query?.days ?? 30)),
     );
 
     /** GET /api/stats/top?kind=query|doc —— 热门检索词 / 被引用文档 TOP10 */

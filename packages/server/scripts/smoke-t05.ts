@@ -3,6 +3,7 @@
  * 覆盖：meta.needsSetup 翻转、providers 配置状态、settings 读/写往返、ui.themeId 持久化。
  */
 import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
@@ -11,7 +12,7 @@ mkdirSync(TMP, { recursive: true });
 process.env.NODE_ENV = 'test';
 process.env.DATA_DIR = TMP;
 process.env.DB_PATH = path.join(TMP, 'kb.db');
-process.env.JWT_SECRET = 'smoke-test-secret-0123456789abcdef';
+process.env.JWT_SECRET = randomBytes(32).toString('hex');
 process.env.EMBEDDING_PROVIDER = 'none';
 process.env.LLM_PROVIDER = 'none';
 process.env.LOG_LEVEL = 'silent';
@@ -43,7 +44,7 @@ async function call(method: string, url: string, token: string, payload?: unknow
 }
 
 const uname = `t5_${Date.now().toString(36)}`;
-const reg = await call('POST', '/api/auth/register', '', { username: uname, password: 'QaTest12345' });
+const reg = await call('POST', '/api/auth/register', '', { username: uname, password: `${randomBytes(18).toString('base64url')}!A1` });
 const token = reg.body.data.token as string;
 
 // [1] needsSetup 初始 true -> 配凭据后 false
@@ -51,7 +52,7 @@ const token = reg.body.data.token as string;
   const meta1 = await call('GET', '/api/meta', token);
   assert.equal(meta1.body.data.needsSetup, true, '无凭据时 needsSetup=true');
 
-  const put = await call('PUT', '/api/providers/deepseek/credentials', token, { apiKey: ['sk', 'test-placeholder'].join('-') });
+  const put = await call('PUT', '/api/providers/deepseek/credentials', token, { apiKey: randomBytes(24).toString('base64url') });
   assert.equal(put.body.data.configured, true);
 
   const meta2 = await call('GET', '/api/meta', token);

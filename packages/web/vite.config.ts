@@ -28,6 +28,18 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    emptyOutDir: true,
     sourcemap: true,
+    chunkSizeWarningLimit: 500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts') || id.includes('node_modules/zrender')) return 'charts';
+          if (id.includes('node_modules/framer-motion')) return 'motion';
+          if (id.includes('node_modules/react')) return 'react';
+          return undefined;
+        },
+      },
+    },
   },
 });

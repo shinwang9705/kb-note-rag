@@ -3,9 +3,12 @@
  * 颜色读 CSS 变量（app 主题切换自动换色；cockpit 用 --chart-* 深色色板）。
  */
 import { useMemo } from 'react';
-import type { EChartsCoreOption } from 'echarts/core';
+import { use, type EChartsCoreOption } from 'echarts/core';
+import { PieChart } from 'echarts/charts';
 import type { DistItem } from '@kb/shared';
 import { chartPalette, EChartsBase, useThemeVersion, type ChartVariant } from './EChartsBase.js';
+
+use([PieChart]);
 
 interface DonutChartProps {
   data: DistItem[];
