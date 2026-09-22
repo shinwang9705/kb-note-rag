@@ -1,5 +1,7 @@
 # kb-note：基于 RAG 的知识库智能问答系统
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一个面向个人和小型团队的 B/S 架构知识库系统。系统以对话为核心入口，把文档解析、全文检索、向量检索、重排序和大模型生成组合成一条完整的 RAG 链路，并在回答中保留可回溯的原文引用。
 
 项目采用 npm workspaces 管理，前端为 React + Vite，后端为 Fastify + TypeScript，数据存储使用 Node.js 内置 SQLite。运行时数据库、上传文档、模型文件和密钥均保存在本地，不包含在仓库中。
@@ -201,4 +203,4 @@ npm run build
 
 ## License
 
-本项目当前未附带开源许可证。在添加明确许可证之前，默认保留所有权利。
+本项目采用 [MIT License](LICENSE) 开源。你可以自由使用、复制、修改、合并、发布和分发本项目，但需保留原始版权声明和许可声明。
